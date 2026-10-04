@@ -1,4 +1,8 @@
-"""Moving-average crossover bot with confluence filters, trading on Alpaca.
+"""Trading bot for Alpaca: monthly trend allocation (default) or the archived EMA crossover.
+
+config.STRATEGY picks the mode:
+  "trend_allocation" / "hold_by_default"  monthly allocation with split rebalancing (run_allocation)
+  "ema_crossover"                         archived setup J, daily per-symbol signals (run_symbol)
 
 Usage:
     python bot.py              # dry run or live according to config.DRY_RUN
@@ -20,6 +24,7 @@ import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
 
+import allocation
 import config
 from indicators import add_indicators
 
@@ -27,7 +32,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LOG_DIR = os.path.join(HERE, config.LOG_DIR)
 STATE_PATH = os.path.join(HERE, config.STATE_FILE)
 CSV_PATH = os.path.join(LOG_DIR, "runs.csv")
+ALLOC_CSV_PATH = os.path.join(LOG_DIR, "allocation_runs.csv")
 LAST_RUN_PATH = os.path.join(LOG_DIR, "last_scheduled_run.txt")
+ALLOCATION_STRATEGIES = ("trend_allocation", "hold_by_default")
+
+ALLOC_FIELDS = [
+    "run_time", "signal_date", "strategy", "trading_day", "tranches_due", "symbol", "close", "average",
+    "above", "target_weight", "price", "current_qty", "target_qty", "order_qty", "action", "reason",
+]
 
 CSV_FIELDS = [
     "run_time", "bar_date", "symbol", "price", "close", "ma_fast", "ma_slow", "sma_trend",
@@ -356,6 +368,227 @@ def finish(row):
     return row
 
 
+# --------------------------------------------------------------------------- monthly allocation
+def allocation_universe():
+    """(assets, signal function) for the active allocation strategy (rules in allocation.py)."""
+    if config.STRATEGY == "trend_allocation":
+        assets = list(config.ALLOCATION_ASSETS)
+        return assets, lambda px, s, month_end: allocation.trend_signals(
+            px, s, assets, config.ALLOCATION_MA_MONTHS, month_end)
+    if config.STRATEGY == "hold_by_default":
+        assets = list(config.HOLD_ASSETS)
+        return assets, lambda px, s, month_end: allocation.hold_signals(px, s, assets, config.HOLD_SMA_DAYS)
+    raise ValueError(f"unknown allocation strategy {config.STRATEGY!r}")
+
+
+def fetch_closes(symbols, market_open):
+    """Completed daily closes (one column per symbol) and the latest price of each symbol."""
+    closes, latest = {}, {}
+    for symbol in symbols:
+        raw = yf.Ticker(symbol).history(period="2y", interval="1d", auto_adjust=True)
+        if raw.empty:
+            raise RuntimeError(f"yfinance returned no data for {symbol}")
+        latest[symbol] = float(raw["Close"].iloc[-1])  # may be today's live bar
+        closes[symbol] = signal_bars(raw, market_open)["Close"]
+    df = pd.DataFrame(closes)
+    df.index = df.index.tz_localize(None).normalize()
+    return df.ffill(limit=5), latest
+
+
+def trading_day_of_month(client, day):
+    """How many trading days of `day`'s month have happened up to and including `day`."""
+    from alpaca.trading.requests import GetCalendarRequest
+
+    calendar = client.get_calendar(GetCalendarRequest(start=day.replace(day=1), end=day))
+    return sum(1 for c in calendar if c.date <= day)
+
+
+def new_ledger(positions, cash, universe):
+    """Split the current account into TRANCHES equal virtual parts."""
+    n = config.TRANCHES
+    held = {s: q for s, q in positions.items() if s in universe}
+    return {"strategy": config.STRATEGY, "tranches": [
+        {"cash": cash / n, "shares": {s: q / n for s, q in held.items()}, "last_rebalance": None}
+        for _ in range(n)]}
+
+
+def reconcile_ledger(ledger, positions, cash, universe):
+    """Scale the virtual tranches to the real account (fills, rounding, manual trades)."""
+    notes, tranches = [], ledger["tranches"]
+    for s in universe:
+        booked = sum(t["shares"].get(s, 0.0) for t in tranches)
+        actual = positions.get(s, 0.0)
+        if abs(booked - actual) > 1e-3:          # ignore rounding to 4 decimals
+            notes.append(f"{s} {booked:.4f} -> {actual:.4f}")
+            for t in tranches:
+                t["shares"][s] = (t["shares"].get(s, 0.0) * actual / booked if booked > 0
+                                  else actual / len(tranches))
+    booked_cash = sum(t["cash"] for t in tranches)
+    if abs(booked_cash - cash) > 0.01:
+        for t in tranches:
+            t["cash"] += (cash - booked_cash) / len(tranches)
+    return notes
+
+
+def round_qty(qty, fractionable):
+    """Round toward zero: 4 decimals for fractional shares, whole shares otherwise."""
+    step = 1e-4 if fractionable else 1.0
+    return math.copysign(math.floor(abs(qty) / step + 1e-9) * step, qty)
+
+
+def write_alloc_rows(rows):
+    new_file = not os.path.exists(ALLOC_CSV_PATH)
+    with open(ALLOC_CSV_PATH, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=ALLOC_FIELDS)
+        if new_file:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in ALLOC_FIELDS})
+
+
+def run_allocation(client, clock, dry_run):
+    """Monthly allocation with split rebalancing.
+
+    The account is divided into TRANCHES virtual parts (kept in bot_state.json). Part k
+    rebalances on trading day 1 + k * TRANCHE_SPACING_DAYS of each month to the current
+    target weights; money not allocated is held in CASH_SYMBOL (BIL). A run on any other
+    day only logs the signals. Missed rebalance days are caught up on the next run.
+    """
+    universe, signal_fn = allocation_universe()
+    cash_symbol = config.CASH_SYMBOL
+    tradable = universe + [cash_symbol]
+    now = pd.Timestamp.now(tz="America/New_York")
+    today, month = now.date(), now.strftime("%Y-%m")
+
+    account = client.get_account()
+    pos_objs = {p.symbol: p for p in client.get_all_positions()}
+    positions = {s: float(p.qty) for s, p in pos_objs.items()}
+    cash = float(account.cash)
+    pending = [o for o in client.get_orders(filter=_open_orders_request()) if o.symbol in set(tradable) | set(positions)]
+
+    closes, latest = fetch_closes(tradable, clock.is_open)
+    px = allocation.Prices(closes[universe])
+    s = closes.index[-1]                       # last completed trading day
+    month_end = s.month != today.month         # first trading day of a new month -> month-end closes
+    signals = signal_fn(px, s, month_end)
+    weights = allocation.weights_from(signals)
+    weights[cash_symbol] = max(0.0, 1.0 - sum(weights.values()))
+    prices = {sym: latest[sym] for sym in tradable}
+    prices.update({sym: float(p.current_price) for sym, p in pos_objs.items() if sym not in prices})
+
+    state = load_state()
+    ledger = state.get("allocation")
+    notes = []
+    if not ledger or ledger.get("strategy") != config.STRATEGY or len(ledger["tranches"]) != config.TRANCHES:
+        ledger = new_ledger(positions, cash, tradable)
+        notes.append("new ledger: all tranches rebalance now")
+        initial = True
+    else:
+        notes += [f"reconciled {n}" for n in reconcile_ledger(ledger, positions, cash, tradable)]
+        initial = False
+
+    day = trading_day_of_month(client, today)
+    spacing = config.TRANCHE_SPACING_DAYS
+    due = [k for k, t in enumerate(ledger["tranches"])
+           if initial or (t["last_rebalance"] != month and day >= allocation.tranche_day(k, spacing))]
+    for k in due:
+        t = ledger["tranches"][k]
+        value = t["cash"] + sum(q * prices[sym] for sym, q in t["shares"].items())
+        t["shares"] = {sym: w * value / prices[sym] for sym, w in weights.items() if w > 0}
+        t["cash"] = 0.0
+        if not initial or day >= allocation.tranche_day(k, spacing):
+            t["last_rebalance"] = month   # tranches whose day is still ahead also rebalance on it
+
+    # Orders: move the account from its real positions to the sum of all tranches.
+    targets = {sym: sum(t["shares"].get(sym, 0.0) for t in ledger["tranches"]) for sym in tradable}
+    for sym in positions:
+        targets.setdefault(sym, 0.0)           # anything outside the strategy is sold
+    fractionable = {sym: bool(getattr(client.get_asset(sym), "fractionable", False)) for sym in targets}
+    orders = {}
+    for sym, target in targets.items():
+        qty = round_qty(target - positions.get(sym, 0.0), fractionable[sym])
+        if target == 0 and positions.get(sym, 0.0) > 0:
+            qty = -positions[sym]               # close whole positions, including fractions
+        if qty and abs(qty) * prices[sym] >= config.MIN_ORDER_VALUE:
+            orders[sym] = qty
+    buy_value = sum(q * prices[sym] for sym, q in orders.items() if q > 0)
+    sell_value = sum(-q * prices[sym] for sym, q in orders.items() if q < 0)
+    available = min(cash, float(account.non_marginable_buying_power)) + sell_value * 0.995
+    if buy_value > available:                  # never use margin: scale buys down to the cash available
+        scale = max(0.0, available) / buy_value
+        notes.append(f"buys scaled to {scale:.1%} of target to stay within cash")
+        orders = {sym: (round_qty(q * scale, fractionable[sym]) if q > 0 else q) for sym, q in orders.items()}
+
+    blockers = []
+    if pending:
+        blockers.append(f"{len(pending)} open order(s) pending")
+    if not clock.is_open:
+        blockers.append(f"market closed (next open {clock.next_open})")
+    if not orders:
+        action_all = "NO TRADE"
+    elif dry_run:
+        action_all = "DRY RUN"
+    elif blockers:
+        action_all = "BLOCKED: " + "; ".join(blockers)
+    else:
+        action_all = "SUBMIT"
+
+    submitted = {}
+    if action_all == "SUBMIT":
+        for sym, qty in sorted(orders.items(), key=lambda kv: kv[1]):   # sells first
+            submitted[sym] = submit_market_order(client, sym, abs(qty), "BUY" if qty > 0 else "SELL")
+    if not dry_run and action_all in ("SUBMIT", "NO TRADE"):   # blocked or dry runs leave the ledger as it was
+        state["allocation"] = ledger
+        save_state(state)
+
+    due_text = ("all (initial)" if initial else ",".join(str(k + 1) for k in due)) if due else "none"
+    next_days = [allocation.tranche_day(k, spacing) for k in range(config.TRANCHES)]
+    if dry_run and blockers:
+        notes.append("a live run now would be blocked: " + "; ".join(blockers))
+    reason = (f"trading day {day} of {now:%b}; tranches rebalance on days {next_days}; due: {due_text}"
+              + (f"; {'; '.join(notes)}" if notes else ""))
+    run_time = now.strftime("%Y-%m-%d %H:%M:%S")
+    rows = []
+    for sym in sorted(targets, key=lambda x: (x not in universe, x != cash_symbol, x)):
+        close, avg, above = signals.get(sym, (closes[sym].iloc[-1] if sym in closes else None, None, None))
+        qty = orders.get(sym, 0.0)
+        if not qty:
+            action = "NO TRADE"
+        elif action_all == "SUBMIT":
+            action = f"{'BUY' if qty > 0 else 'SELL'} {abs(qty):g} submitted (order {submitted[sym]})"
+        elif action_all == "DRY RUN":
+            action = f"DRY RUN: would {'BUY' if qty > 0 else 'SELL'} {abs(qty):g}"
+        else:
+            action = f"NO TRADE ({'BUY' if qty > 0 else 'SELL'} {abs(qty):g} {action_all.lower()})"
+        rows.append({
+            "run_time": run_time, "signal_date": str(s.date()), "strategy": config.STRATEGY,
+            "trading_day": day, "tranches_due": due_text, "symbol": sym, "close": fmt(close),
+            "average": fmt(avg), "above": "" if above is None else above,
+            "target_weight": round(weights.get(sym, 0.0), 4), "price": fmt(prices.get(sym)),
+            "current_qty": round(positions.get(sym, 0.0), 4), "target_qty": round(targets[sym], 4),
+            "order_qty": round(qty, 4), "action": action, "reason": reason,
+        })
+        log.info("%s %s close=%s avg=%s above=%s weight=%.1f%% | hold=%s target=%s | %s",
+                 rows[-1]["signal_date"], sym, rows[-1]["close"], rows[-1]["average"], rows[-1]["above"],
+                 weights.get(sym, 0.0) * 100, rows[-1]["current_qty"], rows[-1]["target_qty"], action)
+    log.info("ALLOCATION %s | %s | equity $%s, buys $%s, sells $%s | %s", config.STRATEGY, reason,
+             f"{float(account.equity):,.0f}", f"{buy_value:,.0f}", f"{sell_value:,.0f}", action_all)
+    write_alloc_rows(rows)
+    return rows
+
+
+def _open_orders_request():
+    from alpaca.trading.enums import QueryOrderStatus
+    from alpaca.trading.requests import GetOrdersRequest
+
+    return GetOrdersRequest(status=QueryOrderStatus.OPEN)
+
+
+def run_units():
+    """What a scheduled run completes per day: each symbol (crossover) or one allocation run."""
+    return list(config.SYMBOLS) if config.STRATEGY == "ema_crossover" else ["ALLOCATION"]
+
+
 # --------------------------------------------------------------------------- scheduling
 def scheduler_log(message):
     """One line per scheduled wake-up (skips included) in logs/scheduler.log."""
@@ -391,7 +624,7 @@ def scheduled_skip_reason(client):
     this check pins the real run to US Eastern time, so DST changes don't matter.
     """
     now = pd.Timestamp.now(tz="America/New_York")
-    if set(config.SYMBOLS) <= symbols_done_today():
+    if set(run_units()) <= symbols_done_today():
         return "already ran today"
     if now.strftime("%H:%M") < config.SCHEDULED_RUN_TIME_ET:
         return f"too early ({now:%H:%M} ET < {config.SCHEDULED_RUN_TIME_ET} ET)"
@@ -420,7 +653,7 @@ def main():
     setup_logging()
     try:
         client = alpaca_client()
-        symbols = config.SYMBOLS
+        symbols = run_units()
         if args.scheduled:
             skip = scheduled_skip_reason(client)
             if skip:
@@ -441,7 +674,10 @@ def main():
     failed = []
     for symbol in symbols:
         try:
-            run_symbol(client, symbol, clock, dry_run)
+            if symbol == "ALLOCATION":
+                run_allocation(client, clock, dry_run)
+            else:
+                run_symbol(client, symbol, clock, dry_run)
             if args.scheduled:
                 mark_done_today(symbol)
         except Exception:

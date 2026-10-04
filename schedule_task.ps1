@@ -37,7 +37,7 @@ $settings = New-ScheduledTaskSettingsSet -WakeToRun -StartWhenAvailable `
     -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew
 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -Description "MA crossover bot (Alpaca paper). Runs once per trading day at/after 9:35 AM ET." `
+    -Description "Trend allocation bot (Alpaca paper). Runs once per trading day at/after 9:35 AM ET." `
     -Force | Out-Null
 
 "Trigger window: {0:hh\:mm} local, every 5 min for {1} min, Mon-Fri" -f $windowStart, $windowMins

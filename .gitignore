@@ -2,9 +2,10 @@
 .env
 .streamlit/secrets.toml
 
-# Runtime output (runs.csv is committed so the dashboard can show run history)
+# Runtime output (run histories are committed so the dashboard can show them)
 logs/*
 !logs/runs.csv
+!logs/allocation_runs.csv
 bot_state.json
 backtests/
 

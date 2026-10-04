@@ -1,10 +1,35 @@
 """Strategy and bot settings. Edit values here; no code changes needed."""
 
-# --- Instrument & core signal -------------------------------------------------
-# Each symbol is checked every run with the same strategy, and has its own
-# position, stop loss and log rows.
-# Setup "J" from the backtest study (see README): EMA 10/30 crossover, no entry
-# filters, 12 liquid ETFs, equal-weight positions.
+# --- Strategy selector ----------------------------------------------------------
+# "trend_allocation": monthly trend allocation across asset classes (ACTIVE, see README)
+# "hold_by_default":  monthly; 12 US ETFs, each in cash while below its 200-day average
+#                     (researched, not chosen: deeper drawdowns with split rebalancing)
+# "ema_crossover":    daily EMA 10/30 crossover on 12 ETFs (setup J, archived below)
+STRATEGY = "trend_allocation"
+
+# --- Trend allocation (STRATEGY = "trend_allocation") ---------------------------
+# Equal weight (1/7) in every asset whose close is above its 10-month average; the
+# rest is held in CASH_SYMBOL. Chosen by the research in research.py (README).
+ALLOCATION_ASSETS = ["SPY", "EFA", "IEF", "TLT", "GLD", "DBC", "VNQ"]
+ALLOCATION_MA_MONTHS = 10
+CASH_SYMBOL = "BIL"            # 0-3 month T-bill ETF used as cash
+
+# --- Hold by default (STRATEGY = "hold_by_default") -------------------------------
+HOLD_ASSETS = ["SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU"]
+HOLD_SMA_DAYS = 200
+
+# --- Split rebalancing (both monthly strategies) --------------------------------
+# The account is split into TRANCHES virtual parts; part k rebalances on trading day
+# 1 + k * TRANCHE_SPACING_DAYS of each month (days 1, 6, 11, 16), which spreads out
+# the luck of rebalancing on one particular day.
+TRANCHES = 4
+TRANCHE_SPACING_DAYS = 5
+MIN_ORDER_VALUE = 25           # skip orders smaller than this ($) to avoid dust trades
+
+# --- Archived: setup J (STRATEGY = "ema_crossover") -------------------------------
+# EMA 10/30 crossover, no entry filters, 12 liquid ETFs, equal-weight positions.
+# Each symbol is checked every run and has its own position, stop loss and log rows.
+# Also used by backtest.py for the setup comparison.
 SYMBOLS = ["SPY", "QQQ", "IWM", "DIA", "XLK", "XLF", "XLE", "XLV", "XLI", "XLY", "XLP", "XLU"]
 MA_TYPE = "EMA"         # "SMA" or "EMA" for the fast/slow crossover pair
 FAST_MA = 10            # fast moving average (days)
@@ -16,13 +41,13 @@ SLOW_MA = 30            # slow moving average (days)
 ENTRY_WINDOW_DAYS = 10
 ONE_ENTRY_PER_CROSSOVER = True  # after exiting, wait for the next crossover to re-enter
 
-# --- Data ---------------------------------------------------------------------
+# --- Data (setup J) -------------------------------------------------------------
 LOOKBACK_BARS = 300     # trading days of daily history to download from yfinance
 # When the market is open, today's daily bar is still forming. True = signals use
 # only completed days (the stop-loss check still uses the latest live price).
 USE_COMPLETED_BARS_ONLY = True
 
-# --- Confluence filters (a BUY needs an up-crossover AND every enabled filter) --
+# --- Setup J: confluence filters (a BUY needs an up-crossover AND every enabled filter)
 # All off in the current setup: in the backtests they cut trades without improving
 # CAGR / max drawdown. Settings are kept so they can be switched back on.
 USE_TREND_FILTER = False    # 1. close above the long-term moving average
@@ -45,7 +70,7 @@ USE_ADX_FILTER = False      # 5. ADX above ADX_MIN (trending market)
 ADX_PERIOD = 14
 ADX_MIN = 20
 
-# --- Exit rules (SELL if ANY enabled rule triggers) ---------------------------
+# --- Setup J: exit rules (SELL if ANY enabled rule triggers) ---------------------
 USE_CROSS_EXIT = True       # fast MA crosses below slow MA
 USE_RSI_EXIT = True         # RSI rises above RSI_EXIT_ABOVE
 RSI_EXIT_ABOVE = 75
@@ -53,7 +78,7 @@ USE_ATR_STOP = True         # price at or below entry - ATR_STOP_MULTIPLIER * AT
 ATR_PERIOD = 14
 ATR_STOP_MULTIPLIER = 2.0
 
-# --- Position sizing ----------------------------------------------------------
+# --- Setup J: position sizing ----------------------------------------------------
 # "equal_weight": each symbol gets equity / len(SYMBOLS), so all open positions
 #                 together can never exceed account equity
 # "fixed":        TRADE_QTY shares per trade
@@ -64,7 +89,7 @@ TRADE_QTY = 1
 RISK_PER_TRADE_PCT = 1.0
 
 # --- Execution ----------------------------------------------------------------
-DRY_RUN = False         # False = place real orders on the (paper) account; True = log only
+DRY_RUN = True          # True = log only; False = place real orders on the (paper) account
 PAPER_TRADING = True    # keep True: trade on the Alpaca paper account
 
 # --- Scheduling (python bot.py --scheduled) -----------------------------------
@@ -80,4 +105,4 @@ BACKTEST_COST_PCT = 0.05     # slippage + fees per side, % of trade value (0.05%
 
 # --- Files --------------------------------------------------------------------
 LOG_DIR = "logs"
-STATE_FILE = "bot_state.json"   # ATR at entry (stop loss) and last crossover traded
+STATE_FILE = "bot_state.json"   # tranche ledger (allocation) / ATR at entry and last crossover (setup J)
