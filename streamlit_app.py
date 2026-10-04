@@ -41,15 +41,34 @@ st.set_page_config(page_title="MA Crossover Bot", page_icon="📈", layout="wide
 
 
 # --------------------------------------------------------------------------- Alpaca (read-only)
-@st.cache_resource
-def trading_client():
-    """Alpaca client from Streamlit secrets, or None if secrets are missing."""
+def alpaca_keys():
+    """(key, secret) from Streamlit secrets, or None if missing.
+
+    Read on every run (not cached) so secrets added or changed in the app settings
+    take effect without restarting the app.
+    """
     try:
-        key, secret = st.secrets["ALPACA_API_KEY"], st.secrets["ALPACA_SECRET_KEY"]
+        return str(st.secrets["ALPACA_API_KEY"]).strip(), str(st.secrets["ALPACA_SECRET_KEY"]).strip()
     except Exception:
         return None
+
+
+def is_placeholder(value):
+    return not value or value.lower().startswith("your_") or value.lower().startswith("your ")
+
+
+@st.cache_resource
+def _client_for(key, secret):
     from alpaca.trading.client import TradingClient
     return TradingClient(key, secret, paper=True)
+
+
+def trading_client():
+    """Alpaca client for the current secrets, or None if they are missing or placeholders."""
+    keys = alpaca_keys()
+    if keys is None or any(is_placeholder(k) for k in keys):
+        return None
+    return _client_for(*keys)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -149,17 +168,25 @@ st.warning("**Paper trading — not financial advice.** This dashboard shows a s
            "paper account for an educational project. It is read-only and cannot place trades.",
            icon="⚠️")
 
+keys = alpaca_keys()
 client = trading_client()
 clock, positions = None, pd.DataFrame()
-if client is None:
+if keys is None:
     st.info("Alpaca secrets are not configured, so account data is hidden. "
             "Add `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in the app's Streamlit secrets.")
+elif client is None:
+    st.warning("The Alpaca secrets still contain placeholder text (e.g. `your_paper_api_key`). "
+               "Replace both values with your real Alpaca **paper** API key and secret, "
+               "keeping the quotes, then save.")
 else:
     try:
         clock = load_clock()
         positions = load_positions()
     except Exception as exc:
-        st.error(f"Could not reach Alpaca: {exc}")
+        unauthorized = any(word in str(exc).lower()
+                           for word in ("401", "403", "unauthorized", "forbidden", "authorization"))
+        st.error("Alpaca rejected the API keys. Check that both secrets are your **paper** trading "
+                 "key and secret, with no extra spaces." if unauthorized else f"Could not reach Alpaca: {exc}")
         client = None
 
 # ?tab=signals|runs|backtest opens that tab directly (handy for sharing links)
