@@ -9,6 +9,7 @@ portfolio history and market calendar, plus files committed to the repo. Signals
 computed with the bot's own code (allocation.py / bot.py).
 """
 import datetime as dt
+import importlib
 import os
 
 import altair as alt
@@ -18,7 +19,13 @@ import streamlit as st
 import allocation
 import bot
 import config
-from indicators import add_indicators
+import indicators
+
+# Streamlit Cloud updates the repo files in place without restarting Python, so modules
+# imported by an earlier version of the app can be stale. Reload them on every run
+# (config first, since the others read it at import time).
+for _module in (config, indicators, allocation, bot):
+    importlib.reload(_module)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUNS_CSV = os.path.join(HERE, "logs", "runs.csv")
@@ -130,7 +137,7 @@ def load_allocation_signals(market_open):
 @st.cache_data(ttl=900, show_spinner=False)
 def load_crossover_signal(symbol, market_open, position_qty, entry_price):
     raw = bot.fetch_bars(symbol)
-    df = add_indicators(bot.signal_bars(raw, market_open), config)
+    df = indicators.add_indicators(bot.signal_bars(raw, market_open), config)
     prev, last = df.iloc[-2], df.iloc[-1]
     price = float(raw["Close"].iloc[-1])
     stop = entry_price - config.ATR_STOP_MULTIPLIER * float(last.atr) if position_qty > 0 and entry_price else None
