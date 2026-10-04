@@ -4,3 +4,4 @@ pandas>=2.0
 numpy>=1.24
 python-dotenv>=1.0
 matplotlib>=3.7
+streamlit>=1.65

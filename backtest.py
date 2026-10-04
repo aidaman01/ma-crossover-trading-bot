@@ -32,8 +32,9 @@ import config  # noqa: E402
 from indicators import add_indicators  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-OUT_DIR = os.path.join(HERE, "backtests")
-CHART_DIR = os.path.join(OUT_DIR, "charts")
+OUT_DIR = os.path.join(HERE, "backtests")             # HTML report (git-ignored)
+PUBLISH_DIR = os.path.join(HERE, "docs", "backtest")  # CSVs + charts (committed; used by README/dashboard)
+CHART_DIR = os.path.join(PUBLISH_DIR, "charts")
 
 FILTER_FLAGS = {
     "trend": "USE_TREND_FILTER", "RSI": "USE_RSI_FILTER", "MACD": "USE_MACD_FILTER",
@@ -291,6 +292,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     years, cost, capital = args.years, args.cost_pct / 100, config.BACKTEST_START_CAPITAL
     main_symbols, extra = list(config.SYMBOLS), list(config.BACKTEST_EXTRA_SYMBOLS)
+    os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(CHART_DIR, exist_ok=True)
 
     print(f"Downloading {years}y (+2y warm-up) of daily data...")
@@ -319,8 +321,8 @@ def main(argv=None):
     # CSV outputs
     all_results = [r for s in main_symbols for r in results[s]] + [r for s in extra for r in robust[s]]
     all_sums = [m for s in main_symbols for m in summaries[s]] + [m for s in extra for m in robust_sum[s]]
-    pd.DataFrame(all_sums).to_csv(os.path.join(OUT_DIR, "summary.csv"), index=False)
-    pd.DataFrame([t for r in all_results for t in r["trades"]]).to_csv(os.path.join(OUT_DIR, "trades.csv"), index=False)
+    pd.DataFrame(all_sums).to_csv(os.path.join(PUBLISH_DIR, "summary.csv"), index=False)
+    pd.DataFrame([t for r in all_results for t in r["trades"]]).to_csv(os.path.join(PUBLISH_DIR, "trades.csv"), index=False)
 
     # Console summary
     for s in main_symbols + extra:
@@ -372,7 +374,7 @@ def main(argv=None):
     report = os.path.join(OUT_DIR, "report.html")
     with open(report, "w", encoding="utf-8") as f:
         f.write("\n".join(html))
-    print(f"\nReport: {report}\nCSV:    {os.path.join(OUT_DIR, 'summary.csv')}, {os.path.join(OUT_DIR, 'trades.csv')}")
+    print(f"\nReport: {report}\nCSV:    {os.path.join(PUBLISH_DIR, 'summary.csv')}, {os.path.join(PUBLISH_DIR, 'trades.csv')}")
 
 
 if __name__ == "__main__":

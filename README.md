@@ -3,8 +3,12 @@
 An automated daily trading bot for US ETFs that trades a 20/50-day moving-average
 crossover, confirmed by up to five technical filters, on an **Alpaca paper trading**
 account. It includes a Windows Task Scheduler setup that runs it every trading morning,
-per-run logging, and a backtester that runs the exact same decision code over historical
-data.
+per-run logging, a backtester that runs the exact same decision code over historical
+data, and a read-only Streamlit dashboard.
+
+**Live dashboard:** [DASHBOARD_URL](DASHBOARD_URL) <!-- replace with your Streamlit Cloud URL -->
+
+![Dashboard: today's indicator values and filter results for SPY and QQQ](docs/dashboard_signals.png)
 
 > **Disclaimer:** This project is for educational purposes only. It is configured for
 > paper trading (simulated money) and is **not financial advice**. Trading involves risk
@@ -23,6 +27,8 @@ data.
 - **Scheduler:** runs once per trading day at 9:35 AM US Eastern, all year round, from any time zone
 - **Logging:** every run writes all indicator values, filter results and the action taken
 - **Backtester:** no look-ahead, slippage costs, filter-by-filter comparison, charts
+- **Dashboard:** read-only Streamlit app with account, positions, equity curve, today's
+  signals, run history and backtest results; deployable free on Streamlit Community Cloud
 
 ## Strategy
 
@@ -56,8 +62,11 @@ indicators.py       SMA, RSI, MACD, ATR, ADX
 config.py           all strategy, risk, scheduling and backtest settings
 backtest.py         backtester + filter study, writes backtests/report.html
 schedule_task.ps1   registers the Windows Task Scheduler job
-.env.example        template for Alpaca API credentials
-docs/               charts used in this README
+streamlit_app.py    read-only dashboard (Streamlit)
+.env.example        template for Alpaca API credentials (bot)
+.streamlit/         dashboard theme + secrets.toml.example (dashboard credentials)
+logs/runs.csv       run history, committed so the dashboard can show it
+docs/               screenshots, plus backtest results (docs/backtest/) used by README and dashboard
 ```
 
 ## Setup
@@ -135,6 +144,51 @@ Unregister-ScheduledTask "Trading Bot" -Confirm:$false    # remove
 On macOS/Linux, a cron entry running `python bot.py --scheduled` every 5 minutes on
 weekdays does the same job.
 
+## Dashboard
+
+[`streamlit_app.py`](streamlit_app.py) is a **read-only** dashboard: it has no buttons that
+place, change or cancel orders, and only reads from Alpaca and from files in the repo.
+
+| Tab | Shows |
+|---|---|
+| Account | account value, cash, market status, equity curve (Alpaca portfolio history), open positions |
+| Today's signals | latest indicator values, filter pass/fail and the bot's decision for each symbol, computed with the bot's own `evaluate()` |
+| Run history | trade log (BUY/SELL signals) and every run from `logs/runs.csv` |
+| Backtest | filter comparison table, equity-vs-buy-and-hold charts and trade lists from `docs/backtest/` |
+
+Add `?tab=signals`, `?tab=runs` or `?tab=backtest` to the URL to open a tab directly.
+
+![Dashboard account tab](docs/dashboard_account.png)
+
+Run it locally:
+
+```bash
+cp .streamlit/secrets.toml.example .streamlit/secrets.toml   # add your paper keys; git-ignored
+streamlit run streamlit_app.py
+```
+
+The dashboard reads Alpaca keys from **Streamlit secrets only** (never from `.env` or the
+code). Without secrets it still shows the signals, run history and backtest tabs.
+Run history and backtest results come from the repo, so they update when you commit
+and push new `logs/runs.csv` or `docs/backtest/` files.
+
+### Deploying on Streamlit Community Cloud (free)
+
+1. Push this repo to GitHub (the dashboard reads `logs/runs.csv` and `docs/backtest/` from it).
+2. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub and click **Create app**.
+3. Choose the repo, branch `main` and main file `streamlit_app.py`. Under **Advanced settings**,
+   pick Python 3.12 and paste into **Secrets**:
+   ```toml
+   ALPACA_API_KEY = "your_paper_api_key"
+   ALPACA_SECRET_KEY = "your_paper_secret_key"
+   ```
+4. Click **Deploy**. Secrets can be changed later under the app's **Settings → Secrets**.
+5. Put the app URL in place of `DASHBOARD_URL` at the top of this README.
+
+Use **paper** keys only. Streamlit Community Cloud apps are public by default, so anyone
+with the link can see the paper account's balance and positions (never the keys, which
+stay on the server).
+
 ## Backtesting
 
 ```bash
@@ -145,8 +199,9 @@ The backtester calls the **same `evaluate()` function** as the live bot, with th
 settings from `config.py`, so the two can't drift apart. It runs the strategy with all
 filters on, with no filters, and with each filter switched off one at a time on SPY and
 QQQ. It then runs the best variant unchanged on IWM, DIA, XLK and XLE as a robustness
-check. Output goes to `backtests/` (HTML report with charts and every trade, plus
-`summary.csv` and `trades.csv`).
+check. Output: `backtests/report.html` (HTML report with charts and every trade,
+git-ignored) and `docs/backtest/` (`summary.csv`, `trades.csv` and charts, committed for
+the README and dashboard).
 
 How the backtest stays realistic:
 
@@ -182,11 +237,11 @@ IWM −1.9% vs +34.7%, DIA +9.3% vs +62.6%, XLK +0.1% vs +175.0%, XLE +8.9% vs +
 
 **SPY, crossover only vs. buy & hold** (shaded = holding)
 
-![SPY crossover-only equity vs buy and hold](docs/spy_crossover_only.png)
+![SPY crossover-only equity vs buy and hold](docs/backtest/charts/SPY_no_filters__crossover_only.png)
 
 **QQQ, crossover only vs. buy & hold**
 
-![QQQ crossover-only equity vs buy and hold](docs/qqq_crossover_only.png)
+![QQQ crossover-only equity vs buy and hold](docs/backtest/charts/QQQ_no_filters__crossover_only.png)
 
 ## What I learned
 

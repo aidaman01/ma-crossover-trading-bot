@@ -1,8 +1,10 @@
 # Secrets - never commit
 .env
+.streamlit/secrets.toml
 
-# Runtime output
-logs/
+# Runtime output (runs.csv is committed so the dashboard can show run history)
+logs/*
+!logs/runs.csv
 bot_state.json
 backtests/
 
