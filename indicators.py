@@ -52,11 +52,28 @@ def adx(df: pd.DataFrame, period: int) -> pd.Series:
     return _wilder(dx, period)
 
 
+def ema(series: pd.Series, period: int) -> pd.Series:
+    return series.ewm(span=period, min_periods=period, adjust=False).mean()
+
+
+def moving_average(series: pd.Series, period: int, kind: str) -> pd.Series:
+    return ema(series, period) if kind.upper() == "EMA" else sma(series, period)
+
+
 def add_indicators(df: pd.DataFrame, cfg) -> pd.DataFrame:
     df = df.copy()
-    df["sma_fast"] = sma(df["Close"], cfg.FAST_MA)
-    df["sma_slow"] = sma(df["Close"], cfg.SLOW_MA)
+    df["ma_fast"] = moving_average(df["Close"], cfg.FAST_MA, cfg.MA_TYPE)
+    df["ma_slow"] = moving_average(df["Close"], cfg.SLOW_MA, cfg.MA_TYPE)
     df["sma_trend"] = sma(df["Close"], cfg.TREND_MA)
+
+    # Up-crossover bookkeeping (causal: each row only looks backwards).
+    # cross_age = bars since the most recent up-crossover (0 = it happened on this bar),
+    # last_cross_up = date of that crossover; both NaN before the first crossover.
+    cross_up = (df["ma_fast"] > df["ma_slow"]) & (df["ma_fast"].shift(1) <= df["ma_slow"].shift(1))
+    pos = pd.Series(np.arange(len(df)), index=df.index, dtype=float)
+    df["cross_age"] = pos - pos.where(cross_up).ffill()
+    df["last_cross_up"] = df.index.to_series().where(cross_up).ffill()
+
     df["rsi"] = rsi(df["Close"], cfg.RSI_PERIOD)
     df["macd"], df["macd_signal"] = macd(df["Close"], cfg.MACD_FAST, cfg.MACD_SLOW, cfg.MACD_SIGNAL)
     df["vol_avg"] = sma(df["Volume"], cfg.VOLUME_MA)

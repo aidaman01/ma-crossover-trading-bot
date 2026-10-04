@@ -22,12 +22,20 @@ RUNS_CSV = os.path.join(HERE, "logs", "runs.csv")
 BACKTEST_DIR = os.path.join(HERE, "docs", "backtest")
 REPO_URL = "https://github.com/aidaman01/ma-crossover-trading-bot"
 
-FILTER_LABELS = {"trend": f"Trend (close > SMA{config.TREND_MA})",
-                 "rsi_filter": f"RSI {config.RSI_BUY_MIN}–{config.RSI_BUY_MAX}",
-                 "macd_filter": "MACD > signal",
-                 "volume_filter": f"Volume > {config.VOLUME_MA}d avg",
-                 "adx_filter": f"ADX > {config.ADX_MIN}"}
-STATUS_ICON = {"PASS": "✅ Pass", "FAIL": "❌ Fail", "OFF": "⚪ Off"}
+FILTERS = {"trend": ("Trend", f"Close > SMA{config.TREND_MA}"),
+           "rsi_filter": ("RSI", f"RSI {config.RSI_BUY_MIN}–{config.RSI_BUY_MAX}"),
+           "macd_filter": ("MACD", "MACD > signal"),
+           "volume_filter": ("Volume", f"Volume > {config.VOLUME_MA}d avg"),
+           "adx_filter": ("ADX", f"ADX > {config.ADX_MIN}")}
+ICON = {"PASS": "✅", "FAIL": "❌", "OFF": "–"}
+FAST, SLOW = bot.ma_label(config.FAST_MA), bot.ma_label(config.SLOW_MA)
+ENABLED = [label for key, (label, _) in FILTERS.items()
+           if getattr(config, {"trend": "USE_TREND_FILTER", "rsi_filter": "USE_RSI_FILTER",
+                               "macd_filter": "USE_MACD_FILTER", "volume_filter": "USE_VOLUME_FILTER",
+                               "adx_filter": "USE_ADX_FILTER"}[key])]
+SETUP_TEXT = (f"{FAST}/{SLOW} crossover · entry filters: {', '.join(ENABLED) if ENABLED else 'none'} · "
+              f"{config.ENTRY_WINDOW_DAYS}-day entry window · {len(config.SYMBOLS)} ETFs · "
+              f"{'equal-weight positions' if config.POSITION_SIZING == 'equal_weight' else config.POSITION_SIZING + ' sizing'}")
 
 st.set_page_config(page_title="MA Crossover Bot", page_icon="📈", layout="wide")
 
@@ -47,8 +55,7 @@ def trading_client():
 @st.cache_data(ttl=300, show_spinner=False)
 def load_account():
     a = trading_client().get_account()
-    return {"equity": float(a.equity), "last_equity": float(a.last_equity), "cash": float(a.cash),
-            "buying_power": float(a.buying_power), "status": str(a.status.value if hasattr(a.status, "value") else a.status)}
+    return {"equity": float(a.equity), "last_equity": float(a.last_equity), "cash": float(a.cash)}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -77,7 +84,7 @@ def load_portfolio_history(period):
 # --------------------------------------------------------------------------- strategy snapshot
 @st.cache_data(ttl=900, show_spinner=False)
 def load_signal(symbol, market_open, position_qty, entry_price):
-    """Today's indicator values and the bot's decision, using the bot's own code."""
+    """Latest indicator values and the bot's decision, using the bot's own code."""
     raw = bot.fetch_bars(symbol)
     df = add_indicators(bot.signal_bars(raw, market_open), config)
     prev, last = df.iloc[-2], df.iloc[-1]
@@ -95,24 +102,22 @@ def load_signal(symbol, market_open, position_qty, entry_price):
 def load_runs():
     if not os.path.exists(RUNS_CSV):
         return pd.DataFrame()
-    df = pd.read_csv(RUNS_CSV)
+    df = pd.read_csv(RUNS_CSV).rename(columns=bot.CSV_RENAMES)
     df["run_time"] = pd.to_datetime(df["run_time"])
     return df.sort_values("run_time", ascending=False)
 
 
 @st.cache_data(show_spinner=False)
 def load_backtest():
-    summary_path = os.path.join(BACKTEST_DIR, "summary.csv")
-    trades_path = os.path.join(BACKTEST_DIR, "trades.csv")
-    if not os.path.exists(summary_path):
-        return pd.DataFrame(), pd.DataFrame()
-    trades = pd.read_csv(trades_path) if os.path.exists(trades_path) else pd.DataFrame()
-    return pd.read_csv(summary_path), trades
+    def read(name):
+        path = os.path.join(BACKTEST_DIR, name)
+        return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+    return read("summary.csv"), read("trades.csv"), read("yearly.csv")
 
 
-def chart_path(symbol, variant):
-    slug = "".join(c if c.isalnum() else "_" for c in variant).strip("_").lower()
-    path = os.path.join(BACKTEST_DIR, "charts", f"{symbol}_{slug}.png")
+def chart_path(setup_name):
+    slug = "_".join("".join(c if c.isalnum() else " " for c in setup_name).lower().split())
+    path = os.path.join(BACKTEST_DIR, "charts", f"{slug}.png")
     return path if os.path.exists(path) else None
 
 
@@ -120,10 +125,26 @@ def money(x):
     return f"${x:,.2f}"
 
 
+PCT = st.column_config.NumberColumn(format="%.1f%%")
+
+
+def setups_frame(df):
+    """Backtest summary rows -> display table (percentages as numbers for sorting)."""
+    current = df["is_current"].eq(True) if "is_current" in df else pd.Series(False, index=df.index)
+    out = pd.DataFrame({
+        "Setup": df["setup"] + current.map({True: " ⭐ current", False: ""}),
+        "Trades/mo": df["trades_per_month"].round(1),
+        "Total %": df["total"] * 100, "CAGR %": df["cagr"] * 100, "Max DD %": df["max_dd"] * 100,
+        "CAGR/DD": df["mar"].round(2), "Win rate %": df["win_rate"] * 100,
+        "Basket total %": df["basket_total"] * 100, "Basket CAGR %": df["basket_cagr"] * 100,
+        "Basket max DD %": df["basket_max_dd"] * 100,
+    })
+    return out
+
+
 # --------------------------------------------------------------------------- layout
 st.title("📈 MA Crossover Bot")
-st.caption("20/50-day SMA crossover with trend, RSI, MACD, volume and ADX filters · "
-           f"{', '.join(config.SYMBOLS)} · [Source on GitHub]({REPO_URL})")
+st.caption(f"{SETUP_TEXT} · [Source on GitHub]({REPO_URL})")
 st.warning("**Paper trading — not financial advice.** This dashboard shows a simulated Alpaca "
            "paper account for an educational project. It is read-only and cannot place trades.",
            icon="⚠️")
@@ -153,11 +174,13 @@ with tab_overview:
     else:
         acct = load_account()
         day_change = acct["equity"] - acct["last_equity"]
+        invested = positions["Market value"].sum() if not positions.empty else 0.0
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Account value", money(acct["equity"]),
                   f"{day_change:+,.2f} today" if abs(day_change) >= 0.01 else None)
         c2.metric("Cash", money(acct["cash"]))
-        c3.metric("Open positions", len(positions))
+        c3.metric("Open positions", f"{len(positions)} of {len(config.SYMBOLS)}")
+        c3.caption(f"{invested / acct['equity']:.0%} of equity invested")
         c4.metric("Market", "Open" if clock["is_open"] else "Closed")
         c4.caption(f"Next {'close' if clock['is_open'] else 'open'}: "
                    f"{(clock['next_close'] if clock['is_open'] else clock['next_open']):%a %d %b, %H:%M} ET")
@@ -191,46 +214,72 @@ with tab_overview:
                 c: st.column_config.NumberColumn(format="$%.2f")
                 for c in ["Avg entry", "Price", "Market value", "Unrealized P/L"]
             } | {"P/L %": st.column_config.NumberColumn(format="%.2f%%")})
-    st.caption(f"Bot mode: **{'Dry run' if config.DRY_RUN else 'Live (paper)'}** · "
-               "Account data refreshes every 5 minutes.")
+    st.caption(f"Bot mode: **{'Dry run' if config.DRY_RUN else 'Live orders on the paper account'}** · "
+               f"Each ETF gets up to 1/{len(config.SYMBOLS)} of equity · Account data refreshes every 5 minutes.")
 
 # ---- Today's signals
 with tab_signals:
-    st.caption("Indicator values from the last completed daily bar, evaluated with the bot's own "
-               "decision function. A BUY needs an up-crossover **and** every enabled filter to pass.")
+    st.caption(f"Latest completed daily bar, evaluated with the bot's own decision function. A BUY needs a "
+               f"{FAST}/{SLOW} up-crossover in the last {config.ENTRY_WINDOW_DAYS} days"
+               + (f" and these filters to pass: {', '.join(ENABLED)}." if ENABLED else " (no entry filters enabled).")
+               + " The bot's saved state (crossovers already traded) is not on this server, so a BUY shown "
+                 "here may already have been taken.")
     market_open = bool(clock and clock["is_open"])
-    cols = st.columns(len(config.SYMBOLS))
-    for col, symbol in zip(cols, config.SYMBOLS):
-        with col:
-            st.subheader(symbol)
+    signals, failed = {}, []
+    with st.spinner("Loading market data..."):
+        for symbol in config.SYMBOLS:
             pos = positions[positions["Symbol"] == symbol] if not positions.empty else pd.DataFrame()
             qty = float(pos["Qty"].iloc[0]) if not pos.empty else 0.0
             entry = float(pos["Avg entry"].iloc[0]) if not pos.empty else None
             try:
-                s = load_signal(symbol, market_open, qty, entry)
+                signals[symbol] = (load_signal(symbol, market_open, qty, entry), qty)
             except Exception as exc:
-                st.warning(f"Market data unavailable: {exc}")
-                continue
-            last = s["last"]
-            m1, m2 = st.columns(2)
-            m1.metric("Price", money(s["price"]))
-            m2.metric("Signal", s["signal"])
-            st.markdown(f"**Crossover:** {s['crossover']} &nbsp;·&nbsp; **Bar:** {s['bar_date']}"
-                        + (f" &nbsp;·&nbsp; **Holding:** {qty:g} sh, stop ≈ {money(s['stop'])}" if qty else ""))
-            st.dataframe(pd.DataFrame(
-                [{"Filter": FILTER_LABELS[k], "Result": STATUS_ICON[v]} for k, v in s["filters"].items()]),
-                hide_index=True, width="stretch")
-            st.dataframe(pd.DataFrame([
-                {"Indicator": f"SMA {config.FAST_MA}", "Value": f"{last['sma_fast']:.2f}"},
-                {"Indicator": f"SMA {config.SLOW_MA}", "Value": f"{last['sma_slow']:.2f}"},
-                {"Indicator": f"SMA {config.TREND_MA}", "Value": f"{last['sma_trend']:.2f}"},
-                {"Indicator": f"RSI {config.RSI_PERIOD}", "Value": f"{last['rsi']:.1f}"},
-                {"Indicator": "MACD / signal", "Value": f"{last['macd']:.2f} / {last['macd_signal']:.2f}"},
-                {"Indicator": f"Volume / {config.VOLUME_MA}d avg", "Value": f"{last['Volume'] / 1e6:.1f}M / {last['vol_avg'] / 1e6:.1f}M"},
-                {"Indicator": f"ADX {config.ADX_PERIOD}", "Value": f"{last['adx']:.1f}"},
-                {"Indicator": f"ATR {config.ATR_PERIOD}", "Value": f"{last['atr']:.2f}"},
-            ]), hide_index=True, width="stretch")
-            st.caption(s["reason"])
+                failed.append(f"{symbol} ({exc})")
+    if failed:
+        st.warning("Market data unavailable for: " + ", ".join(failed))
+    if signals:
+        rsi_col = f"RSI {config.RSI_PERIOD}"
+        table = pd.DataFrame([{
+            "Symbol": sym, "Signal": s["signal"], "Price": s["price"], "Held": qty,
+            "Days since up-cross": (str(s["cross_age"]) if s["cross_age"] is not None
+                                    and s["last"]["ma_fast"] > s["last"]["ma_slow"] else "–"),
+            FAST: s["last"]["ma_fast"], SLOW: s["last"]["ma_slow"], rsi_col: s["last"]["rsi"],
+            **{f"{label} filter": ICON[s["filters"][key]] for key, (label, _) in FILTERS.items()},
+        } for sym, (s, qty) in signals.items()])
+        st.dataframe(table, hide_index=True, width="stretch", column_config={
+            "Price": st.column_config.NumberColumn(format="$%.2f"),
+            FAST: st.column_config.NumberColumn(format="%.2f"), SLOW: st.column_config.NumberColumn(format="%.2f"),
+            rsi_col: st.column_config.NumberColumn(format="%.1f"),
+            "Held": st.column_config.NumberColumn(format="%g"),
+            "Days since up-cross": st.column_config.TextColumn(help="– = fast MA is below the slow MA"),
+        })
+        st.caption(f"Bar date {next(iter(signals.values()))[0]['bar_date']} · ✅ pass · ❌ fail · – filter off")
+
+        st.subheader("Details")
+        symbol = st.selectbox("Symbol", list(signals), label_visibility="collapsed")
+        s, qty = signals[symbol]
+        last = s["last"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Price", money(s["price"]))
+        m2.metric("Signal", s["signal"])
+        m3.metric("Crossover", s["crossover"], f"{s['cross_age']} day(s) since up-cross"
+                  if s["cross_age"] is not None else None, delta_color="off", delta_arrow="off")
+        if qty:
+            st.markdown(f"**Holding:** {qty:g} shares, stop ≈ {money(s['stop'])}")
+        d1, d2 = st.columns(2)
+        d1.dataframe(pd.DataFrame([{"Filter": desc, "Result": {"PASS": "✅ Pass", "FAIL": "❌ Fail", "OFF": "Off"}[s["filters"][k]]}
+                                   for k, (_, desc) in FILTERS.items()]), hide_index=True, width="stretch")
+        d2.dataframe(pd.DataFrame([
+            {"Indicator": FAST, "Value": f"{last['ma_fast']:.2f}"},
+            {"Indicator": SLOW, "Value": f"{last['ma_slow']:.2f}"},
+            {"Indicator": f"SMA {config.TREND_MA}", "Value": f"{last['sma_trend']:.2f}"},
+            {"Indicator": f"RSI {config.RSI_PERIOD}", "Value": f"{last['rsi']:.1f}"},
+            {"Indicator": "MACD / signal", "Value": f"{last['macd']:.2f} / {last['macd_signal']:.2f}"},
+            {"Indicator": f"Volume / {config.VOLUME_MA}d avg", "Value": f"{last['Volume'] / 1e6:.1f}M / {last['vol_avg'] / 1e6:.1f}M"},
+            {"Indicator": f"ADX {config.ADX_PERIOD}", "Value": f"{last['adx']:.1f}"},
+            {"Indicator": f"ATR {config.ATR_PERIOD}", "Value": f"{last['atr']:.2f}"},
+        ]), hide_index=True, width="stretch")
+        st.caption(s["reason"])
 
 # ---- Run history
 with tab_runs:
@@ -240,71 +289,74 @@ with tab_runs:
     else:
         st.caption(f"From `logs/runs.csv` in the repo, {len(runs)} rows; last run "
                    f"{runs['run_time'].iloc[0]:%Y-%m-%d %H:%M} ET. Updates when new runs are pushed to GitHub.")
-        trades = runs[runs["signal"].isin(["BUY", "SELL"])]
         st.subheader("Trade log")
-        if trades.empty:
-            st.write("No BUY or SELL signals yet.")
+        orders = runs[runs["action"].astype(str).str.contains("submitted", na=False)]
+        if orders.empty:
+            st.write("No orders submitted yet.")
         else:
-            st.dataframe(trades[["run_time", "symbol", "signal", "price", "action", "reason"]],
-                         hide_index=True, width="stretch")
+            st.dataframe(orders[["run_time", "symbol", "signal", "qty", "price", "action", "reason"]],
+                         hide_index=True, width="stretch",
+                         column_config={"run_time": st.column_config.DatetimeColumn("Run (ET)", format="YYYY-MM-DD HH:mm")})
         st.subheader("All runs")
-        symbols = st.multiselect("Symbols", sorted(runs["symbol"].unique()), default=None,
-                                 placeholder="All symbols")
+        symbols = st.multiselect("Symbols", sorted(runs["symbol"].unique()), default=None, placeholder="All symbols")
         view = runs[runs["symbol"].isin(symbols)] if symbols else runs
-        st.dataframe(view[["run_time", "symbol", "price", "crossover", "trend", "rsi_filter", "macd_filter",
-                           "volume_filter", "adx_filter", "signal", "action", "reason"]],
-                     hide_index=True, width="stretch",
+        cols = [c for c in ["run_time", "symbol", "price", "crossover", "cross_age", "trend", "rsi_filter",
+                            "macd_filter", "volume_filter", "adx_filter", "signal", "qty", "action", "reason"]
+                if c in view.columns]
+        st.dataframe(view[cols], hide_index=True, width="stretch",
                      column_config={"run_time": st.column_config.DatetimeColumn("Run (ET)", format="YYYY-MM-DD HH:mm")})
 
 # ---- Backtest
 with tab_backtest:
-    summary, bt_trades = load_backtest()
-    if summary.empty:
+    summary, bt_trades, yearly = load_backtest()
+    if summary.empty or "study" not in summary.columns:
         st.info("No backtest results in docs/backtest/. Run `python backtest.py` and commit the output.")
     else:
+        setups = summary[summary["study"] == "setups"].reset_index(drop=True)
+        study = summary[summary["study"] == "filter study"].reset_index(drop=True)
         st.caption(f"{config.BACKTEST_YEARS} years of daily data, ${config.BACKTEST_START_CAPITAL:,} start, "
-                   f"{config.BACKTEST_COST_PCT}% cost per side, no look-ahead. Same decision code as the live bot.")
-        main = summary[summary["symbol"].isin(config.SYMBOLS)]
-        rows = []
-        for symbol in config.SYMBOLS:
-            sm = main[main["symbol"] == symbol]
-            if sm.empty:
-                continue
-            rows.append({"Symbol": symbol, "Variant": "Buy & hold", "Total %": sm["bh_total"].iloc[0] * 100,
-                         "CAGR %": sm["bh_cagr"].iloc[0] * 100, "Max DD %": sm["bh_max_dd"].iloc[0] * 100,
-                         "Trades": None, "Win rate %": None, "In market %": 100.0})
-            for _, r in sm.iterrows():
-                rows.append({"Symbol": symbol, "Variant": r["variant"], "Total %": r["total"] * 100,
-                             "CAGR %": r["cagr"] * 100, "Max DD %": r["max_dd"] * 100, "Trades": r["trades"],
-                             "Win rate %": r["win_rate"] * 100, "In market %": r["exposure"] * 100})
-        pct = st.column_config.NumberColumn(format="%.1f%%")
-        st.subheader("Filter comparison")
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch",
-                     column_config={c: pct for c in ["Total %", "CAGR %", "Max DD %", "Win rate %", "In market %"]})
+                   f"{config.BACKTEST_COST_PCT}% cost per side, no look-ahead, same decision and sizing code as "
+                   "the live bot. One shared account per setup with equal-weight positions; basket = equal-weight "
+                   "buy and hold of the same ETFs.")
+        cfg = {c: PCT for c in ["Total %", "CAGR %", "Max DD %", "Win rate %",
+                                "Basket total %", "Basket CAGR %", "Basket max DD %"]}
+        st.subheader("Setup comparison")
+        st.dataframe(setups_frame(setups), hide_index=True, width="stretch", column_config=cfg)
+        if not study.empty:
+            with st.expander("Filter study on the current setup"):
+                st.dataframe(setups_frame(study), hide_index=True, width="stretch", column_config=cfg)
 
-        st.subheader("Equity vs. buy & hold")
-        c1, c2 = st.columns(2)
-        symbol = c1.selectbox("Symbol", sorted(summary["symbol"].unique(),
-                                                key=lambda s: (s not in config.SYMBOLS, s)))
-        variants = summary[summary["symbol"] == symbol]["variant"].tolist()
-        with_charts = [v for v in variants if chart_path(symbol, v)] or variants
-        default = with_charts.index("No filters (crossover only)") if "No filters (crossover only)" in with_charts else 0
-        variant = c2.selectbox("Variant", with_charts, index=default)
-        path = chart_path(symbol, variant)
+        st.subheader("Equity vs. buy & hold basket")
+        names = setups["setup"].tolist()
+        current = setups.loc[setups["is_current"].eq(True), "setup"]
+        choice = st.selectbox("Setup", names, index=names.index(current.iloc[0]) if len(current) else 0)
+        path = chart_path(choice)
         if path:
             st.image(path, width="stretch")
-        else:
-            st.write("No chart saved for this variant.")
+        c1, c2 = st.columns([1, 2])
+        if not yearly.empty:
+            y = yearly[yearly["setup"] == choice]
+            c1.dataframe(pd.DataFrame({"Year": y["year"].astype(str), "Strategy %": y["strategy"] * 100,
+                                       "Basket %": y["basket"] * 100}),
+                         hide_index=True, width="stretch",
+                         column_config={"Strategy %": PCT, "Basket %": PCT})
         if not bt_trades.empty:
-            t = bt_trades[(bt_trades["symbol"] == symbol) & (bt_trades["variant"] == variant)]
-            st.dataframe(t[["entry_date", "exit_date", "entry_price", "exit_price", "pnl", "pnl_pct", "exit_rule"]]
-                         .assign(pnl_pct=lambda d: d["pnl_pct"] * 100),
-                         hide_index=True, width="stretch", column_config={
-                             "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
-                             "exit_price": st.column_config.NumberColumn("Exit", format="$%.2f"),
-                             "pnl": st.column_config.NumberColumn("P/L", format="$%.0f"),
-                             "pnl_pct": st.column_config.NumberColumn("P/L %", format="%.2f%%"),
-                             "entry_date": "Entry date", "exit_date": "Exit date", "exit_rule": "Exit rule"})
+            t = bt_trades[bt_trades["setup"] == choice]
+            if not t.empty:
+                per = t.groupby("symbol").agg(Trades=("pnl", "size"), Wins=("pnl", lambda p: int((p > 0).sum())),
+                                              PnL=("pnl", "sum")).reset_index().rename(columns={"symbol": "Symbol"})
+                c2.dataframe(per, hide_index=True, width="stretch",
+                             column_config={"PnL": st.column_config.NumberColumn("P/L", format="$%.0f")})
+                with st.expander(f"Every trade ({len(t)})"):
+                    st.dataframe(t[["symbol", "entry_date", "exit_date", "entry_price", "exit_price", "shares",
+                                    "pnl", "pnl_pct", "exit_rule"]].assign(pnl_pct=lambda d: d["pnl_pct"] * 100),
+                                 hide_index=True, width="stretch", column_config={
+                                     "entry_price": st.column_config.NumberColumn("Entry", format="$%.2f"),
+                                     "exit_price": st.column_config.NumberColumn("Exit", format="$%.2f"),
+                                     "pnl": st.column_config.NumberColumn("P/L", format="$%.0f"),
+                                     "pnl_pct": st.column_config.NumberColumn("P/L %", format="%.2f%%"),
+                                     "symbol": "Symbol", "entry_date": "Entry date", "exit_date": "Exit date",
+                                     "exit_rule": "Exit rule"})
 
 st.divider()
 st.caption("Educational project. Paper trading only. Not financial advice. "

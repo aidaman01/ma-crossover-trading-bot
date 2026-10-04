@@ -30,12 +30,14 @@ CSV_PATH = os.path.join(LOG_DIR, "runs.csv")
 LAST_RUN_PATH = os.path.join(LOG_DIR, "last_scheduled_run.txt")
 
 CSV_FIELDS = [
-    "run_time", "bar_date", "symbol", "price", "close", "sma_fast", "sma_slow", "sma_trend",
-    "rsi", "macd", "macd_signal", "volume", "vol_avg", "adx", "atr", "crossover",
+    "run_time", "bar_date", "symbol", "price", "close", "ma_fast", "ma_slow", "sma_trend",
+    "rsi", "macd", "macd_signal", "volume", "vol_avg", "adx", "atr", "crossover", "cross_age",
     "trend", "rsi_filter", "macd_filter", "volume_filter", "adx_filter",
-    "position_qty", "entry_price", "stop_price", "market_open", "dry_run",
+    "position_qty", "entry_price", "stop_price", "qty", "market_open", "dry_run",
     "signal", "action", "reason",
 ]
+# Older runs.csv files used these names (before EMA support)
+CSV_RENAMES = {"sma_fast": "ma_fast", "sma_slow": "ma_slow"}
 
 log = logging.getLogger("bot")
 
@@ -93,12 +95,27 @@ def signal_bars(df, market_open):
 
 
 # --------------------------------------------------------------------------- strategy
+def ma_label(period):
+    return f"{config.MA_TYPE.upper()}{period}"
+
+
 def crossover(prev, last):
-    if prev.sma_fast <= prev.sma_slow and last.sma_fast > last.sma_slow:
+    if prev.ma_fast <= prev.ma_slow and last.ma_fast > last.ma_slow:
         return "UP"
-    if prev.sma_fast >= prev.sma_slow and last.sma_fast < last.sma_slow:
+    if prev.ma_fast >= prev.ma_slow and last.ma_fast < last.ma_slow:
         return "DOWN"
     return "NONE"
+
+
+def cross_date(last):
+    """Date (YYYY-MM-DD) of the most recent up-crossover, or None."""
+    return None if pd.isna(last.last_cross_up) else pd.Timestamp(last.last_cross_up).strftime("%Y-%m-%d")
+
+
+def entry_window_open(last):
+    """True while the fast MA is above the slow MA and the up-crossover is recent enough."""
+    return (last.ma_fast > last.ma_slow and not pd.isna(last.cross_age)
+            and last.cross_age <= config.ENTRY_WINDOW_DAYS)
 
 
 def check_filters(last):
@@ -117,7 +134,7 @@ def exit_rules_hit(cross, last, price, stop):
     """Return [(rule, description)] for every enabled exit rule that triggered."""
     hits = []
     if config.USE_CROSS_EXIT and cross == "DOWN":
-        hits.append(("MA cross", f"{config.FAST_MA}MA crossed below {config.SLOW_MA}MA"))
+        hits.append(("MA cross", f"{ma_label(config.FAST_MA)} crossed below {ma_label(config.SLOW_MA)}"))
     if config.USE_RSI_EXIT and last.rsi > config.RSI_EXIT_ABOVE:
         hits.append(("RSI exit", f"RSI {last.rsi:.1f} > {config.RSI_EXIT_ABOVE}"))
     if config.USE_ATR_STOP and price <= stop:
@@ -125,17 +142,21 @@ def exit_rules_hit(cross, last, price, stop):
     return hits
 
 
-def evaluate(prev, last, price, position_qty, stop=None):
+def evaluate(prev, last, price, position_qty, stop=None, last_entry_cross=None):
     """Core strategy decision, shared by live runs and the backtest.
 
     prev/last are the two most recent completed bars (with indicators), price is the
-    current price and stop the position's stop price. Returns a dict with signal
-    ('BUY' | 'SELL' | 'NONE'), crossover, filters, exit_rules and reason. Position
-    sizing and order gating (market hours, pending orders) are left to the caller.
+    current price, stop the position's stop price and last_entry_cross the date of the
+    crossover the previous entry used (for ONE_ENTRY_PER_CROSSOVER). Returns a dict with
+    signal ('BUY' | 'SELL' | 'NONE'), crossover, cross_age, cross_date, filters,
+    exit_rules and reason. Position sizing and order gating (market hours, pending
+    orders) are left to the caller.
     """
     cross = crossover(prev, last)
     filters = check_filters(last)
-    result = {"signal": "NONE", "crossover": cross, "filters": filters, "exit_rules": [], "reason": ""}
+    age = None if pd.isna(last.cross_age) else int(last.cross_age)
+    result = {"signal": "NONE", "crossover": cross, "cross_age": age, "cross_date": cross_date(last),
+              "filters": filters, "exit_rules": [], "reason": ""}
 
     if position_qty < 0:
         result["reason"] = f"short position of {position_qty} found; bot does not manage shorts"
@@ -150,18 +171,24 @@ def evaluate(prev, last, price, position_qty, stop=None):
                 result["reason"] += " (up-crossover ignored: already in position)"
     else:
         failed = [name for name, outcome in filters.items() if outcome == "FAIL"]
-        if cross != "UP":
-            result["reason"] = f"no up-crossover (crossover={cross})"
+        when = "today" if age == 0 else f"{age} day(s) ago"
+        if not entry_window_open(last):
+            result["reason"] = (f"no up-crossover (crossover={cross})" if config.ENTRY_WINDOW_DAYS == 0
+                                else f"no up-crossover in the last {config.ENTRY_WINDOW_DAYS} days (crossover={cross})")
             if cross == "DOWN":
                 result["reason"] += "; sell signal ignored: no shares owned, no short selling"
+        elif config.ONE_ENTRY_PER_CROSSOVER and last_entry_cross == result["cross_date"]:
+            result["reason"] = f"already traded the {result['cross_date']} crossover; waiting for the next one"
         elif failed:
-            result["reason"] = "up-crossover but filters failed: " + ", ".join(failed)
+            result["reason"] = f"up-crossover {when} but filters failed: " + ", ".join(failed)
         else:
-            result.update(signal="BUY", reason="up-crossover and all enabled filters passed")
+            passed = ("all enabled filters passed" if "PASS" in filters.values()
+                      else "no entry filters enabled")
+            result.update(signal="BUY", reason=f"up-crossover {when}; {passed}")
     return result
 
 
-INDICATOR_COLUMNS = ["sma_fast", "sma_slow", "sma_trend", "rsi", "macd", "macd_signal", "vol_avg", "adx", "atr"]
+INDICATOR_COLUMNS = ["ma_fast", "ma_slow", "sma_trend", "rsi", "macd", "macd_signal", "vol_avg", "adx", "atr"]
 
 
 def stop_price_for(entry_price, symbol, state, current_atr):
@@ -173,17 +200,27 @@ def stop_price_for(entry_price, symbol, state, current_atr):
     return entry_price - config.ATR_STOP_MULTIPLIER * atr_at_entry
 
 
+def position_size(equity, cash, price, current_atr):
+    """Whole shares to buy, shared by live runs and the backtest.
+
+    equal_weight: equity / len(SYMBOLS) per symbol. With at most one position per
+    symbol, all open positions together cost at most the account equity.
+    Every mode is capped by the cash available, so the bot never uses margin.
+    """
+    if config.POSITION_SIZING == "equal_weight":
+        qty = math.floor(equity / len(config.SYMBOLS) / price)
+    elif config.POSITION_SIZING == "risk":
+        qty = math.floor(equity * config.RISK_PER_TRADE_PCT / 100 / (config.ATR_STOP_MULTIPLIER * current_atr))
+    else:
+        qty = config.TRADE_QTY
+    return max(0, min(qty, math.floor(cash / price)))
+
+
 def buy_quantity(account, price, current_atr):
     # non-marginable buying power is reduced by pending buy orders, so two symbols
     # bought on the same morning can't both spend the same cash
     cash = min(float(account.cash), float(account.non_marginable_buying_power))
-    if config.USE_RISK_SIZING:
-        risk_dollars = float(account.equity) * config.RISK_PER_TRADE_PCT / 100
-        qty = math.floor(risk_dollars / (config.ATR_STOP_MULTIPLIER * current_atr))
-    else:
-        qty = config.TRADE_QTY
-    affordable = math.floor(cash / price)
-    return max(0, min(qty, affordable))
+    return position_size(float(account.equity), cash, price, current_atr)
 
 
 # --------------------------------------------------------------------------- orders
@@ -209,6 +246,12 @@ def open_orders_for(client, symbol):
 # --------------------------------------------------------------------------- logging
 def write_csv(row):
     new_file = not os.path.exists(CSV_PATH)
+    if not new_file:
+        with open(CSV_PATH, encoding="utf-8") as f:
+            header = f.readline().strip().split(",")
+        if header != CSV_FIELDS:  # columns changed: rewrite old rows under the new header
+            old = pd.read_csv(CSV_PATH).rename(columns=CSV_RENAMES)
+            old.reindex(columns=CSV_FIELDS).to_csv(CSV_PATH, index=False)
     with open(CSV_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         if new_file:
@@ -237,7 +280,7 @@ def run_symbol(client, symbol, clock, dry_run):
     row = {
         "run_time": pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M:%S"),
         "bar_date": str(last.name.date()), "symbol": symbol, "price": fmt(price),
-        "close": fmt(last.Close), "sma_fast": fmt(last.sma_fast), "sma_slow": fmt(last.sma_slow),
+        "close": fmt(last.Close), "ma_fast": fmt(last.ma_fast), "ma_slow": fmt(last.ma_slow),
         "sma_trend": fmt(last.sma_trend), "rsi": fmt(last.rsi), "macd": fmt(last.macd, 4),
         "macd_signal": fmt(last.macd_signal, 4), "volume": int(last.Volume),
         "vol_avg": fmt(last.vol_avg, 0), "adx": fmt(last.adx), "atr": fmt(last.atr),
@@ -255,9 +298,10 @@ def run_symbol(client, symbol, clock, dry_run):
         stop = stop_price_for(entry_price, symbol, state, float(last.atr))
         row["stop_price"] = fmt(stop)
 
-    decision = evaluate(prev, last, price, position_qty, stop)
+    decision = evaluate(prev, last, price, position_qty, stop, state.get(symbol, {}).get("entry_cross"))
     signal, reason = decision["signal"], decision["reason"]
     row["crossover"] = decision["crossover"]
+    row["cross_age"] = "" if decision["cross_age"] is None else decision["cross_age"]
     row.update(decision["filters"])
 
     qty = 0
@@ -269,7 +313,7 @@ def run_symbol(client, symbol, clock, dry_run):
             signal = "NONE"
             reason = "up-crossover and filters passed, but position size is 0 (cash or risk limit)"
 
-    row.update(signal=signal, reason=reason)
+    row.update(signal=signal, reason=reason, qty=qty if signal != "NONE" else "")
 
     if signal == "NONE":
         row["action"] = "NO TRADE"
@@ -289,9 +333,9 @@ def run_symbol(client, symbol, clock, dry_run):
         row["action"] = f"{signal} {qty:g} {symbol} submitted (order {order_id})"
         if signal == "BUY":
             state[symbol] = {"atr_at_entry": float(last.atr), "signal_price": price,
-                             "date": row["run_time"]}
-        else:
-            state.pop(symbol, None)
+                             "date": row["run_time"], "entry_cross": decision["cross_date"]}
+        else:  # keep entry_cross so the same crossover isn't traded again
+            state[symbol] = {"entry_cross": state.get(symbol, {}).get("entry_cross")}
         save_state(state)
     return finish(row)
 
@@ -300,12 +344,12 @@ def finish(row):
     filters = " ".join(f"{k}={row.get(k, '')}" for k in
                        ("trend", "rsi_filter", "macd_filter", "volume_filter", "adx_filter"))
     log.info(
-        "%s %s price=%s | SMA%d=%s SMA%d=%s SMA%d=%s RSI=%s MACD=%s/%s Vol=%s/%s ADX=%s ATR=%s | "
-        "cross=%s %s | pos=%s stop=%s | %s -> %s | %s",
-        row["bar_date"], row["symbol"], row["price"], config.FAST_MA, row["sma_fast"],
-        config.SLOW_MA, row["sma_slow"], config.TREND_MA, row["sma_trend"], row["rsi"],
+        "%s %s price=%s | %s=%s %s=%s SMA%d=%s RSI=%s MACD=%s/%s Vol=%s/%s ADX=%s ATR=%s | "
+        "cross=%s age=%s %s | pos=%s stop=%s | %s -> %s | %s",
+        row["bar_date"], row["symbol"], row["price"], ma_label(config.FAST_MA), row["ma_fast"],
+        ma_label(config.SLOW_MA), row["ma_slow"], config.TREND_MA, row["sma_trend"], row["rsi"],
         row["macd"], row["macd_signal"], row["volume"], row["vol_avg"], row["adx"], row["atr"],
-        row.get("crossover", ""), filters, row["position_qty"], row.get("stop_price", ""),
+        row.get("crossover", ""), row.get("cross_age", ""), filters, row["position_qty"], row.get("stop_price", ""),
         row["signal"], row["action"], row["reason"],
     )
     write_csv(row)
