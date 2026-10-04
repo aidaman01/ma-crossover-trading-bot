@@ -1,0 +1,13 @@
+# Secrets - never commit
+.env
+
+# Runtime output
+logs/
+bot_state.json
+backtests/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
