@@ -7,7 +7,7 @@ that runs it every trading morning, per-run logging, a portfolio backtester that
 exact same decision and sizing code over historical data, and a read-only Streamlit
 dashboard.
 
-**Live dashboard:** [DASHBOARD_URL](DASHBOARD_URL) <!-- replace with your Streamlit Cloud URL -->
+**Live dashboard:** [ma-croappver-trading-bot.streamlit.app](https://ma-croappver-trading-bot-97vt9hjg2mof9trvutuqf6.streamlit.app/)
 
 ![Dashboard: today's crossover state and filter results for all 12 ETFs](docs/dashboard_signals.png)
 
@@ -205,7 +205,7 @@ and push new `logs/runs.csv` or `docs/backtest/` files.
    ALPACA_SECRET_KEY = "your_paper_secret_key"
    ```
 4. Click **Deploy**. Secrets can be changed later under the app's **Settings → Secrets**.
-5. Put the app URL in place of `DASHBOARD_URL` at the top of this README.
+5. Put the app URL in the "Live dashboard" link at the top of this README.
 
 Use **paper** keys only. Streamlit Community Cloud apps are public by default, so anyone
 with the link can see the paper account's balance and positions (never the keys, which
