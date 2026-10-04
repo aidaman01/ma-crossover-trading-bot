@@ -17,10 +17,9 @@ run history and the research.
 ![Dashboard: trend signals and target weights](docs/dashboard_signals.png)
 
 > **Disclaimer:** This project is for educational purposes only and is **not financial
-> advice**. It runs on an Alpaca **paper trading** account (simulated money) and is
-> currently in **dry-run mode** (`DRY_RUN = True`): it logs what it would do without
-> placing orders. Trading involves risk of loss; past or backtested performance does not
-> predict future results. Use at your own risk.
+> advice**. Dry-run is **off** (`DRY_RUN = False`): the bot places real orders, but only on
+> an Alpaca **paper trading** account (simulated money). Trading involves risk of loss; past
+> or backtested performance does not predict future results. Use at your own risk.
 
 ## Features
 
@@ -45,7 +44,8 @@ run history and the research.
 | Trend rule | hold an asset while its close is above its **10-month average** (`ALLOCATION_MA_MONTHS`) |
 | Weights | 1/7 per asset in an uptrend; everything else in **BIL** (`CASH_SYMBOL`, 0–3 month T-bills) |
 | Split rebalancing | 4 parts (`TRANCHES`), each rebalancing on trading day 1, 6, 11 or 16 (`TRANCHE_SPACING_DAYS = 5`) |
-| Mode | `DRY_RUN = True` (log only), paper account (`PAPER_TRADING = True`) |
+| Cash buffer | each part keeps 0.5% in cash (`CASH_BUFFER_PCT`) so fills above the quote never use margin |
+| Mode | `DRY_RUN = False`: live orders on the paper account (`PAPER_TRADING = True`) |
 
 **How a run works** ([`bot.py`](bot.py) `run_allocation`):
 
@@ -58,13 +58,15 @@ run history and the research.
    whose day has arrived (or was missed) moves to the new target weights; the others keep
    their holdings.
 3. Orders move the real account to the sum of the four parts. Sells go first, buys are
-   capped by the available cash (never margin), orders under $25 are skipped, and
-   fractional shares are used.
+   capped by the available cash (never margin), each part keeps a 0.5% cash buffer,
+   orders under $25 are skipped, and fractional shares are used.
 4. On the next run, the records are reconciled with the real positions (fills, rounding
    or manual trades), so they never drift from the account.
 
 The first live run invests all four parts at once, so the account is fully allocated
-immediately. After that, each part follows its own schedule.
+immediately, even mid-month. After that, each part follows its own schedule: a first run on
+trading day 3 sets up all parts, then parts 2, 3 and 4 rebalance on days 6, 11 and 16, and
+from the next month on all four use their normal days.
 
 ## Why this strategy
 
@@ -190,13 +192,13 @@ ALPACA_SECRET_KEY=your_secret_key_here
 ## Running the bot
 
 ```bash
-python bot.py               # uses DRY_RUN from config.py (currently True: log only)
+python bot.py               # uses DRY_RUN from config.py (currently False: paper orders)
 python bot.py --dry-run     # never place orders
 python bot.py --live        # place orders on the paper account
 python research.py          # rerun the research
 ```
 
-To go live on paper, set `DRY_RUN = False`. To run the archived strategy instead, set
+To pause trading but keep logging, set `DRY_RUN = True`. To run the archived strategy instead, set
 `STRATEGY = "ema_crossover"` (or `"hold_by_default"` for the researched alternative).
 
 Each run appends one row per asset to `logs/allocation_runs.csv` (close, average, trend,

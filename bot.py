@@ -491,11 +491,12 @@ def run_allocation(client, clock, dry_run):
     spacing = config.TRANCHE_SPACING_DAYS
     due = [k for k, t in enumerate(ledger["tranches"])
            if initial or (t["last_rebalance"] != month and day >= allocation.tranche_day(k, spacing))]
+    buffer = config.CASH_BUFFER_PCT / 100
     for k in due:
         t = ledger["tranches"][k]
         value = t["cash"] + sum(q * prices[sym] for sym, q in t["shares"].items())
-        t["shares"] = {sym: w * value / prices[sym] for sym, w in weights.items() if w > 0}
-        t["cash"] = 0.0
+        t["shares"] = {sym: w * value * (1 - buffer) / prices[sym] for sym, w in weights.items() if w > 0}
+        t["cash"] = value * buffer
         if not initial or day >= allocation.tranche_day(k, spacing):
             t["last_rebalance"] = month   # tranches whose day is still ahead also rebalance on it
 

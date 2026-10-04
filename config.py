@@ -25,6 +25,9 @@ HOLD_SMA_DAYS = 200
 TRANCHES = 4
 TRANCHE_SPACING_DAYS = 5
 MIN_ORDER_VALUE = 25           # skip orders smaller than this ($) to avoid dust trades
+# Each part keeps this % of its value in cash so market orders that fill slightly above
+# the quoted price never push the account into margin.
+CASH_BUFFER_PCT = 0.5
 
 # --- Archived: setup J (STRATEGY = "ema_crossover") -------------------------------
 # EMA 10/30 crossover, no entry filters, 12 liquid ETFs, equal-weight positions.
@@ -89,7 +92,7 @@ TRADE_QTY = 1
 RISK_PER_TRADE_PCT = 1.0
 
 # --- Execution ----------------------------------------------------------------
-DRY_RUN = True          # True = log only; False = place real orders on the (paper) account
+DRY_RUN = False         # False = place real orders on the (paper) account; True = log only
 PAPER_TRADING = True    # keep True: trade on the Alpaca paper account
 
 # --- Scheduling (python bot.py --scheduled) -----------------------------------
