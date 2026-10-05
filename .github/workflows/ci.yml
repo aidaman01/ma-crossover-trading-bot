@@ -1,0 +1,37 @@
+name: CI
+
+# Lint, type check and test on every push and pull request.
+# No secrets, API keys or market data are used: the network is only needed to install
+# packages; the tests themselves block all network access (tests/conftest.py) and run
+# on synthetic data.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Type check (mypy)
+        run: mypy
+
+      - name: Tests (pytest, offline)
+        run: pytest

@@ -1,0 +1,18 @@
+# Lint settings (ruff). CI runs: ruff check .
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv", "data", "backtests"]
+
+[lint]
+# pycodestyle errors/warnings, pyflakes, bugbear, import sorting, pyupgrade, simplify
+select = ["E", "W", "F", "B", "I", "UP", "SIM"]
+ignore = [
+  "SIM108",  # ternary rewrites are not always clearer
+]
+
+[lint.per-file-ignores]
+# research/backtest/charts select the matplotlib backend before importing pyplot
+"research_charts.py" = ["E402"]
+"backtest.py" = ["E402"]
+# TEMPORARY: one long line in the live bot; wrapped after the live run of 2026-10-05, then removed
+"bot.py" = ["E501"]
