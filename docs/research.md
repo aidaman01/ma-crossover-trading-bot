@@ -213,7 +213,8 @@ stayed below 10% in both halves.
 One partial mitigation is that the 10-month rule itself was published by Faber in 2007, so
 its main parameter was not fitted to the 2007–2026 data; the universe, the tranche design and
 the choice among approaches were. **The only genuine out-of-sample evidence is the live paper
-trading that started on 2026-10-05**; its record (`logs/allocation_runs.csv`) should be
+trading that started on 2026-10-05**; it is logged day by day in the
+[paper-trading journal](paper-trading.md) and in `logs/allocation_runs.csv`, and should be
 evaluated separately once it covers a meaningful period.
 
 ## Robustness / Sensitivity Analysis
