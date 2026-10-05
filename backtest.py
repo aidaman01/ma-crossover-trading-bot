@@ -1,4 +1,14 @@
-"""Portfolio backtest of the live strategy: setup comparison + filter study.
+"""ARCHIVED: backtest of setup J (daily EMA crossover) - 2021-2026 setup comparison.
+
+This module documents how setup J was chosen in an earlier phase of the project. The live
+bot now runs monthly trend allocation (see research.py and docs/research.md); setup J is
+kept as a comparison strategy and as config.STRATEGY = "ema_crossover". research.py still
+imports WATCHLIST_12, CANDIDATES and config_overrides from here.
+
+Note: the results in docs/backtest/ were generated on 2026-10-04 with a 5-year window
+ending at that date; rerunning uses a window ending today, so the numbers will move.
+Curve metrics now come from the shared metrics.py (CAGR counts the first day from the
+starting capital, which changes the archived CAGRs by less than 0.01 percentage points).
 
 Usage:
     python backtest.py                 # writes docs/backtest/ and backtests/report.html
@@ -34,6 +44,7 @@ import yfinance as yf  # noqa: E402
 
 import bot  # noqa: E402
 import config  # noqa: E402
+import metrics  # noqa: E402
 from indicators import add_indicators  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -224,13 +235,9 @@ def run_setup(raw, name, settings, years, cost, capital):
 
 # --------------------------------------------------------------------------- metrics
 def curve_stats(curve, capital):
-    years = (curve.index[-1] - curve.index[0]).days / 365.25
-    peak = curve.cummax().clip(lower=capital)
-    total = curve.iloc[-1] / capital - 1
-    cagr = (curve.iloc[-1] / capital) ** (1 / years) - 1
-    max_dd = (curve / peak - 1).min()
-    return {"total": total, "cagr": cagr, "max_dd": max_dd,
-            "mar": cagr / abs(max_dd) if max_dd < 0 else float("nan")}
+    """Total return, CAGR, max drawdown and CAGR/|max DD| from the shared metrics module."""
+    return {"total": metrics.total_return(curve, capital), "cagr": metrics.cagr(curve, capital),
+            "max_dd": metrics.max_drawdown(curve, capital), "mar": metrics.calmar_ratio(curve, capital)}
 
 
 def yearly_returns(curve, capital):
@@ -343,7 +350,8 @@ def detail_section(res, m, capital):
             f"<tr><td>{s}</td><td>{int(r.trades)}</td><td>{pct(r.wins / r.trades, False) if r.trades else '–'}</td>"
             f"<td class='{'pos' if r.pnl > 0 else 'neg'}'>{usd(r.pnl)}</td></tr>" for s, r in per.iterrows())
     trade_rows = "".join(
-        f"<tr><td>{t['symbol']}</td><td>{t['entry_date']}</td><td>{t['exit_date']}{' (open)' if t['status'] == 'open' else ''}</td>"
+        f"<tr><td>{t['symbol']}</td><td>{t['entry_date']}</td>"
+        f"<td>{t['exit_date']}{' (open)' if t['status'] == 'open' else ''}</td>"
         f"<td>${t['entry_price']:,.2f}</td><td>${t['exit_price']:,.2f}</td><td>{t['shares']:g}</td>"
         f"<td class='{'pos' if t['pnl'] > 0 else 'neg'}'>{usd(t['pnl'])}</td>"
         f"<td class='{'pos' if t['pnl'] > 0 else 'neg'}'>{pct(t['pnl_pct'])}</td>"
@@ -446,7 +454,8 @@ def main(argv=None):
     cur_sum = next(m for m in sums if m["setup"] == current)
     start, end = cur["equity"].index[[0, -1]]
     html = [
-        "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Strategy Backtest</title><style>{CSS}</style></head><body><main>",
         "<h1>Strategy backtest</h1>",
         f"<p class='muted'>{start:%Y-%m-%d} to {end:%Y-%m-%d} · start capital {usd(capital)} · cost "
@@ -457,7 +466,8 @@ def main(argv=None):
         "checked once a day at the open. One shared cash account per setup, equal-weight positions "
         "(equity ÷ number of symbols), whole shares, no margin. Benchmark: equal-weight buy-and-hold basket "
         "of the same symbols. Exits for every setup: fast MA crosses below slow MA, "
-        f"RSI &gt; {config.RSI_EXIT_ABOVE}, stop {config.ATR_STOP_MULTIPLIER}×ATR({config.ATR_PERIOD}) below entry.</p>",
+        f"RSI &gt; {config.RSI_EXIT_ABOVE}, "
+        f"stop {config.ATR_STOP_MULTIPLIER}×ATR({config.ATR_PERIOD}) below entry.</p>",
         "<h2>Setup comparison</h2>",
         f"<p class='muted'>Best = highest CAGR ÷ |max drawdown| among candidates A–J with "
         f"{TARGET_TRADES_PER_MONTH[0]}–{TARGET_TRADES_PER_MONTH[1]} trades per month. Trades = positions opened.</p>",
