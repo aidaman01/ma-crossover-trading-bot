@@ -10,6 +10,7 @@ computed with the bot's own code (allocation.py / bot.py).
 """
 import datetime as dt
 import importlib
+import json
 import os
 
 import altair as alt
@@ -20,6 +21,7 @@ import allocation
 import bot
 import config
 import indicators
+import metrics
 
 # Streamlit Cloud updates the repo files in place without restarting Python, so modules
 # imported by an earlier version of the app can be stale. Reload them on every run
@@ -260,7 +262,7 @@ def render_allocation_signals():
         st.warning(f"Market data unavailable: {exc}")
         return
     equity = acct["equity"] if acct else None
-    held = dict(zip(positions["Symbol"], positions["Market value"])) if not positions.empty else {}
+    held = dict(zip(positions["Symbol"], positions["Market value"], strict=True)) if not positions.empty else {}
     avg_label = (f"{config.ALLOCATION_MA_MONTHS}-month avg" if config.STRATEGY == "trend_allocation"
                  else f"{config.HOLD_SMA_DAYS}-day avg")
     rows = []
@@ -332,7 +334,8 @@ with tab_runs:
             st.caption(f"From `logs/allocation_runs.csv` in the repo; last run {last_time:%Y-%m-%d %H:%M} ET. "
                        "Updates when new runs are pushed to GitHub.")
             st.markdown(f"**Last run:** {latest['reason'].iloc[0]}")
-            st.dataframe(latest[["symbol", "above", "target_weight", "current_qty", "target_qty", "order_qty", "action"]]
+            cols = ["symbol", "above", "target_weight", "current_qty", "target_qty", "order_qty", "action"]
+            st.dataframe(latest[cols]
                          .assign(target_weight=lambda d: d["target_weight"] * 100),
                          hide_index=True, width="stretch", column_config={"target_weight": PCT})
             orders = alloc_runs[alloc_runs["action"].astype(str).str.contains("submitted", na=False)]
@@ -356,51 +359,134 @@ with tab_runs:
                 "run_time": st.column_config.DatetimeColumn("Run (ET)", format="YYYY-MM-DD HH:mm")})
 
 # ---- Research
+MAIN_STRATEGIES = ["Trend allocation (4 parts)", "Setup J (archived)", "SPY buy & hold", "60/40 SPY/IEF"]
+
+
+def metrics_frame(df: pd.DataFrame, name_col: str) -> pd.DataFrame:
+    """Research metrics (computed by research.py / metrics.py) formatted for display."""
+    return pd.DataFrame({
+        "Strategy": df[name_col], "CAGR %": df["cagr"] * 100, "Volatility %": df["vol"] * 100,
+        "Sharpe": df["sharpe"].round(2), "Sortino": df["sortino"].round(2), "Max DD %": df["max_dd"] * 100,
+        "Calmar": df["calmar"].round(2), "Worst year %": df["worst_year"] * 100,
+        "Turnover/yr %": df["turnover_per_year"] * 100})
+
+
+SERIES_COLORS = {"Trend allocation (4 parts)": "#2a78d6", "Setup J (archived)": "#eb6834",
+                 "SPY buy & hold": "#3d3c39", "60/40 SPY/IEF": "#8a8986"}   # same as research_charts.py
+EXTRA_COLORS = ["#1baf7a", "#eda100", "#e87ba4", "#008300", "#4a3aa7", "#e34948"]
+
+
+def color_scale(names: list[str]) -> alt.Scale:
+    extra = iter(EXTRA_COLORS * 3)
+    return alt.Scale(domain=names, range=[SERIES_COLORS.get(n) or next(extra) for n in names])
+
+
+def line_chart(df: pd.DataFrame, y_title: str, log: bool = False, fmt: str = ",.0f") -> alt.Chart:
+    long = df.reset_index(names="Date").melt("Date", var_name="Strategy", value_name="Value").dropna()
+    scale = alt.Scale(type="log") if log else alt.Scale(zero=False)
+    return alt.Chart(long).mark_line(strokeWidth=1.8).encode(
+        x=alt.X("Date:T", title=None),
+        y=alt.Y("Value:Q", title=y_title, scale=scale, axis=alt.Axis(format=fmt)),
+        color=alt.Color("Strategy:N", scale=color_scale(list(df.columns)),
+                        legend=alt.Legend(orient="bottom", columns=2)),
+        tooltip=[alt.Tooltip("Date:T", format="%Y-%m-%d"), "Strategy:N", alt.Tooltip("Value:Q", format=fmt)],
+    ).properties(height=320)
+
+
+def dated(df: pd.DataFrame) -> pd.DataFrame:
+    """CSV with the date in the first column -> DatetimeIndex."""
+    return df.set_index(pd.to_datetime(df.iloc[:, 0])).iloc[:, 1:]
+
+
 with tab_research:
     summary = load_csv(os.path.join(RESEARCH_DIR, "summary.csv"))
-    split = load_csv(os.path.join(RESEARCH_DIR, "split.csv"))
-    stress = load_csv(os.path.join(RESEARCH_DIR, "stress.csv"))
-    if summary.empty:
+    if summary.empty or "sortino" not in summary:
         st.info("No research results in docs/research/. Run `python research.py` and commit the output.")
     else:
-        st.caption("January 2007 – October 2026, dividend-adjusted, 0.05% cost per side, idle cash earning "
-                   "T-bill/BIL returns, no look-ahead. Setup J variants use the live bot's own code.")
+        manifest = {}
+        manifest_path = os.path.join(RESEARCH_DIR, "data_manifest.json")
+        if os.path.exists(manifest_path):
+            with open(manifest_path, encoding="utf-8") as f:
+                manifest = json.load(f)
+        st.caption(
+            f"Jan 2007 – {manifest.get('end_date', 'Oct 2026')}, dividend-adjusted, 0.05% cost per side on every "
+            "trade (including BIL), no look-ahead. Input data SHA-256 "
+            f"`{manifest.get('combined_sha256', '?')[:16]}…` (docs/research/data_manifest.json). "
+            "**Approach 1 was chosen by comparing five approaches on this same history, so these results are "
+            "in-sample;** the only genuine out-of-sample test is the paper trading that began on 2026-10-05.")
+        cfg = {c: PCT for c in ["CAGR %", "Volatility %", "Max DD %", "Worst year %", "Turnover/yr %"]}
 
-        def metrics_frame(df, name_col):
-            return pd.DataFrame({
-                "Strategy": df[name_col], "CAGR %": df["cagr"] * 100, "Volatility %": df["vol"] * 100,
-                "Sharpe": df["sharpe"].round(2), "Max DD %": df["max_dd"] * 100,
-                "Worst year %": df["worst_year"] * 100, "Trades/yr": df["trades_per_year"].round(1)})
-        cfg = {c: PCT for c in ["CAGR %", "Volatility %", "Max DD %", "Worst year %"]}
+        st.subheader("Chosen strategy vs. benchmarks")
+        period = st.radio("Period", list(summary["period"].unique()), horizontal=True, label_visibility="collapsed")
+        rows = summary[summary["period"] == period]
+        show_all = st.toggle("Show all five approaches (in-sample model selection)")
+        rows = rows if show_all else rows[rows["strategy"].isin(MAIN_STRATEGIES)]
+        st.dataframe(metrics_frame(rows, "strategy"), hide_index=True, width="stretch", column_config=cfg)
 
-        if not split.empty:
-            st.subheader("Chosen strategy (trend allocation, split) vs. alternatives")
-            pick = split[split["variant"].str.contains("standard")].copy()
-            pick["name"] = pick["approach"]
-            full = summary[summary["period"] == "Full period"]
-            bench = full[full["strategy"].isin(["60/40 SPY/IEF", "SPY buy & hold"])].copy()
-            bench["name"] = bench["strategy"]
-            st.dataframe(metrics_frame(pd.concat([pick, bench]), "name"), hide_index=True, width="stretch",
-                         column_config=cfg)
-            with st.expander("Split rebalancing variants (robustness)"):
-                st.dataframe(metrics_frame(split.assign(name=split["approach"] + " · " + split["variant"]), "name"),
-                             hide_index=True, width="stretch", column_config=cfg)
+        curves = load_csv(os.path.join(RESEARCH_DIR, "equity_weekly.csv"))
+        if not curves.empty:
+            curves = dated(curves)
+            default = [c for c in MAIN_STRATEGIES if c in curves.columns]
+            picked = st.multiselect("Strategies", list(curves.columns), default=default)
+            if picked:
+                st.altair_chart(line_chart(curves[picked], "Value of $100k (log scale)", log=True, fmt="$,.0f"),
+                                width="stretch")
+                dd = pd.DataFrame({c: metrics.drawdown_series(curves[c]) * 100 for c in picked})
+                st.altair_chart(line_chart(dd, "Drawdown % (weekly closes)", fmt=".0f"), width="stretch")
+                st.caption("Charts use weekly closes; the tables use daily data, so daily drawdowns can be deeper.")
 
-        st.subheader("All approaches")
-        period = st.radio("Period", list(summary["period"].unique()), horizontal=True,
-                          label_visibility="collapsed")
-        st.dataframe(metrics_frame(summary[summary["period"] == period], "strategy"), hide_index=True,
-                     width="stretch", column_config=cfg)
-        image(os.path.join(RESEARCH_DIR, "equity_log.png"))
-        with st.expander("Drawdowns"):
-            image(os.path.join(RESEARCH_DIR, "drawdowns.png"))
-        if not stress.empty:
+        rolling_df = load_csv(os.path.join(RESEARCH_DIR, "rolling_weekly.csv"))
+        if not rolling_df.empty:
+            rolling_df = dated(rolling_df)
+            labels = {"vol 63d": "63-day volatility", "sharpe 252d": "252-day Sharpe"}
+            which = st.radio("Rolling statistic", list(labels), horizontal=True, format_func=labels.get)
+            sub = rolling_df[[c for c in rolling_df.columns if c.endswith(which)]]
+            sub.columns = [c.split(" | ")[0] for c in sub.columns]
+            is_vol = which == "vol 63d"
+            st.altair_chart(line_chart(sub * (100 if is_vol else 1), "Volatility %" if is_vol else "Sharpe",
+                                       fmt=".1f"), width="stretch")
+
+        robust = load_csv(os.path.join(RESEARCH_DIR, "robustness.csv"))
+        if not robust.empty:
+            st.subheader("Robustness of the chosen strategy")
+            st.caption("Each variant changes one assumption of the live configuration (marked ★). The goal is to "
+                       "see how stable the results are, not to pick the best-looking variant.")
+            group = st.selectbox("Assumption", list(dict.fromkeys(robust["group"])))
+            g = robust[robust["group"] == group].copy()
+            g["Variant"] = g["variant"] + g["standard"].map({True: " ★", False: ""})
+            st.dataframe(metrics_frame(g, "Variant"), hide_index=True, width="stretch", column_config=cfg)
+            st.altair_chart(alt.Chart(g).mark_circle(size=90).encode(
+                x=alt.X("max_dd:Q", title="Max drawdown", axis=alt.Axis(format="%")),
+                y=alt.Y("sharpe:Q", title="Sharpe", scale=alt.Scale(zero=False)),
+                color=alt.Color("standard:N", title="Live configuration"),
+                tooltip=["Variant:N", alt.Tooltip("cagr:Q", format=".1%"), alt.Tooltip("sharpe:Q", format=".2f"),
+                         alt.Tooltip("max_dd:Q", format=".1%")]).properties(height=260), width="stretch")
+            image(os.path.join(RESEARCH_DIR, "robustness.png"))
+
+        regimes_df = load_csv(os.path.join(RESEARCH_DIR, "regimes.csv"))
+        if not regimes_df.empty:
+            st.subheader("Market regimes")
+            st.caption("Bull/bear: SPY above/below its 200-day average at the previous close. High/low volatility: "
+                       "SPY's 63-day realized volatility at the previous close above/below its expanding median.")
+            kind = st.radio("Regime type", list(dict.fromkeys(regimes_df["regime_type"])), horizontal=True)
+            rg = regimes_df[regimes_df["regime_type"] == kind]
+            st.altair_chart(alt.Chart(rg).mark_bar().encode(
+                x=alt.X("strategy:N", title=None, sort=MAIN_STRATEGIES, axis=alt.Axis(labelAngle=0, labelLimit=140)),
+                y=alt.Y("ann_compounded:Q", title="Annualized compounded return", axis=alt.Axis(format="%")),
+                color=alt.Color("strategy:N", legend=None, scale=color_scale(MAIN_STRATEGIES)),
+                column=alt.Column("regime:N", title=None),
+                tooltip=["strategy:N", alt.Tooltip("ann_compounded:Q", format=".1%"),
+                         alt.Tooltip("sharpe:Q", format=".2f"), alt.Tooltip("share_of_days:Q", format=".0%")],
+            ).properties(height=240, width=230))
+
+        stress_df = load_csv(os.path.join(RESEARCH_DIR, "stress.csv"))
+        if not stress_df.empty:
             with st.expander("Stress years (2008, 2020, 2022)"):
-                st.dataframe(stress.assign(**{"return": stress["return"] * 100, "max_dd": stress["max_dd"] * 100}),
+                st.dataframe(stress_df.assign(**{"return": stress_df["return"] * 100,
+                                                 "max_dd": stress_df["max_dd"] * 100}),
                              hide_index=True, width="stretch",
-                             column_config={"return": PCT, "max_dd": st.column_config.NumberColumn("max DD", format="%.1f%%")})
-        with st.expander("Sensitivity to nearby parameters"):
-            image(os.path.join(RESEARCH_DIR, "sensitivity.png"))
+                             column_config={"return": PCT,
+                                            "max_dd": st.column_config.NumberColumn("max DD", format="%.1f%%")})
 
     bt = load_csv(os.path.join(BACKTEST_DIR, "summary.csv"))
     if not bt.empty and "study" in bt:
