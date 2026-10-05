@@ -146,6 +146,28 @@ def test_pending_orders_block_trading(live):
     assert c.submitted == [] and "pending" in rows[0]["action"]
 
 
+def test_duplicate_bars_are_dropped(monkeypatch):
+    idx = pd.DatetimeIndex(["2026-10-01", "2026-10-02", "2026-10-02"], tz="America/New_York")
+    df = pd.DataFrame({"Open": [1.0, 2.0, 2.5], "High": [1.0, 2.0, 2.5], "Low": [1.0, 2.0, 2.5],
+                       "Close": [1.0, 2.0, 2.5], "Volume": [1.0, 1.0, 1.0]}, index=idx)
+    monkeypatch.setattr(bot.yf, "Ticker", lambda s: types.SimpleNamespace(history=lambda **kw: df))
+    closes, latest = bot.fetch_closes(["AAA"], market_open=False)
+    assert not closes.index.duplicated().any() and latest["AAA"] == 2.5
+    assert not bot.fetch_bars("AAA").index.duplicated().any()
+
+
+def test_missing_data_is_logged_and_goes_to_bil(live, monkeypatch, caplog):
+    closes, latest = synthetic_closes()
+    closes.loc[closes.index[-1], "SPY"] = np.nan                         # no close for SPY on the signal date
+    monkeypatch.setattr(bot, "fetch_closes", lambda symbols, market_open: (closes, latest))
+    c = FakeClient(latest)
+    with caplog.at_level("WARNING", logger="bot"):
+        rows = bot.run_allocation(c, OPEN, dry_run=True)
+    assert any("SPY: no usable trend signal" in r.message for r in caplog.records)
+    spy = next(r for r in rows if r["symbol"] == "SPY")
+    assert spy["target_weight"] == 0 and "SPY: missing data" in rows[0]["reason"]
+
+
 def test_reconcile_scales_ledger_to_real_positions():
     led = {"tranches": [{"cash": 10.0, "shares": {"SPY": 2.0}}, {"cash": 10.0, "shares": {"SPY": 6.0}}]}
     notes = bot.reconcile_ledger(led, {"SPY": 4.0}, 30.0, ["SPY"])

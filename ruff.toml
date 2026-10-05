@@ -14,5 +14,3 @@ ignore = [
 # research/backtest/charts select the matplotlib backend before importing pyplot
 "research_charts.py" = ["E402"]
 "backtest.py" = ["E402"]
-# TEMPORARY: one long line in the live bot; wrapped after the live run of 2026-10-05, then removed
-"bot.py" = ["E501"]

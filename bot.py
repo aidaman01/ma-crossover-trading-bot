@@ -95,6 +95,7 @@ def fetch_bars(symbol):
     df = yf.Ticker(symbol).history(period="2y", interval="1d", auto_adjust=True)
     if df.empty:
         raise RuntimeError(f"yfinance returned no data for {symbol}")
+    df = df[~df.index.duplicated(keep="last")]          # Yahoo occasionally repeats the latest bar
     return df[["Open", "High", "Low", "Close", "Volume"]].tail(config.LOOKBACK_BARS)
 
 
@@ -388,6 +389,7 @@ def fetch_closes(symbols, market_open):
         raw = yf.Ticker(symbol).history(period="2y", interval="1d", auto_adjust=True)
         if raw.empty:
             raise RuntimeError(f"yfinance returned no data for {symbol}")
+        raw = raw[~raw.index.duplicated(keep="last")]  # Yahoo occasionally repeats the latest bar
         latest[symbol] = float(raw["Close"].iloc[-1])  # may be today's live bar
         closes[symbol] = signal_bars(raw, market_open)["Close"]
     df = pd.DataFrame(closes)
@@ -464,13 +466,21 @@ def run_allocation(client, clock, dry_run):
     pos_objs = {p.symbol: p for p in client.get_all_positions()}
     positions = {s: float(p.qty) for s, p in pos_objs.items()}
     cash = float(account.cash)
-    pending = [o for o in client.get_orders(filter=_open_orders_request()) if o.symbol in set(tradable) | set(positions)]
+    watched = set(tradable) | set(positions)
+    pending = [o for o in client.get_orders(filter=_open_orders_request()) if o.symbol in watched]
 
     closes, latest = fetch_closes(tradable, clock.is_open)
     px = allocation.Prices(closes[universe])
     s = closes.index[-1]                       # last completed trading day
     month_end = s.month != today.month         # first trading day of a new month -> month-end closes
     signals = signal_fn(px, s, month_end)
+    data_notes = []
+    for sym, (close, avg, _) in signals.items():
+        last_date = closes[sym].last_valid_index()
+        if pd.isna(close) or pd.isna(avg) or last_date is None or last_date < s:
+            log.warning("%s: no usable trend signal on %s (close=%s, average=%s, last data %s); treated as "
+                        "below its average, its share stays in %s", sym, s.date(), close, avg, last_date, cash_symbol)
+            data_notes.append(f"{sym}: missing data -> {cash_symbol}")
     weights = allocation.weights_from(signals)
     weights[cash_symbol] = max(0.0, 1.0 - sum(weights.values()))
     prices = {sym: latest[sym] for sym in tradable}
@@ -478,7 +488,7 @@ def run_allocation(client, clock, dry_run):
 
     state = load_state()
     ledger = state.get("allocation")
-    notes = []
+    notes = list(data_notes)
     if not ledger or ledger.get("strategy") != config.STRATEGY or len(ledger["tranches"]) != config.TRANCHES:
         ledger = new_ledger(positions, cash, tradable)
         notes.append("new ledger: all tranches rebalance now")

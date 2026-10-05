@@ -24,7 +24,7 @@ class Prices:
         self.month_end_idx = pd.DatetimeIndex(sorted(cal.groupby(cal.dt.to_period("M")).max()))
         self.month_ends = set(self.month_end_idx)
         self.pos = {d: i for i, d in enumerate(self.calendar)}
-        self._sma = {}
+        self._sma: dict[int, pd.DataFrame] = {}
 
     def sma(self, days):
         if days not in self._sma:
