@@ -1,6 +1,6 @@
 # Trend Allocation Trading Bot
 
-[![CI](https://github.com/aidaman01/ma-crossover-trading-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/aidaman01/ma-crossover-trading-bot/actions/workflows/ci.yml)
+[![CI](https://github.com/aidaman01/trend-allocation-research-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/aidaman01/trend-allocation-research-bot/actions/workflows/ci.yml)
 
 A research project and live paper-trading bot that tests whether a simple **trend-following
 asset allocation** (Faber, 2007) offers a better trade-off between return and loss than
@@ -157,8 +157,8 @@ robustness and regime views computed from the research outputs).
 ## Run it locally
 
 ```bash
-git clone https://github.com/aidaman01/ma-crossover-trading-bot
-cd ma-crossover-trading-bot
+git clone https://github.com/aidaman01/trend-allocation-research-bot
+cd trend-allocation-research-bot
 pip install -r requirements-dev.txt
 
 pytest                         # 61 offline tests (network blocked, no API keys)

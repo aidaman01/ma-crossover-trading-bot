@@ -34,7 +34,7 @@ RUNS_CSV = os.path.join(HERE, "logs", "runs.csv")
 ALLOC_CSV = os.path.join(HERE, "logs", "allocation_runs.csv")
 RESEARCH_DIR = os.path.join(HERE, "docs", "research")
 BACKTEST_DIR = os.path.join(HERE, "docs", "backtest")
-REPO_URL = "https://github.com/aidaman01/ma-crossover-trading-bot"
+REPO_URL = "https://github.com/aidaman01/trend-allocation-research-bot"
 IS_ALLOCATION = config.STRATEGY in bot.ALLOCATION_STRATEGIES
 TRANCHE_DAYS = [allocation.tranche_day(k, config.TRANCHE_SPACING_DAYS) for k in range(config.TRANCHES)]
 
