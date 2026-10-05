@@ -1,0 +1,131 @@
+{
+  "source": "Yahoo Finance via yfinance, auto_adjust=True (split- and dividend-adjusted OHLC)",
+  "rate_series": "^IRX (13-week T-bill discount rate, %); cash = BIL total return from its first trading day, T-bill rate accrued per calendar day / 360 before that",
+  "downloaded_at_utc": "2026-10-05T10:42:52Z",
+  "yfinance_version": "1.7.0",
+  "end_date": "2026-10-02",
+  "hash_method": "SHA-256 of canonical CSV (Date as YYYY-MM-DD, OHLCV rounded to 6 decimals)",
+  "combined_sha256": "a4a32c688cef69e55a9881620c5e4579b889a9cb91433628372030805cad5404",
+  "series": {
+    "BIL": {
+      "first": "2007-05-30",
+      "last": "2026-10-02",
+      "rows": 4868,
+      "sha256": "0631579222d9248670855fd4a0fe28859669dff74e461fbdc04f93b27f63a3a1"
+    },
+    "DBC": {
+      "first": "2006-02-06",
+      "last": "2026-10-02",
+      "rows": 5197,
+      "sha256": "6944378d34fec85f5319e22be3917a4f5a17669bf72d6d284739500e7e256f19"
+    },
+    "DIA": {
+      "first": "1998-01-20",
+      "last": "2026-10-02",
+      "rows": 7221,
+      "sha256": "f50d3cd1dd936b58f653d856f50b84342ca2d0889a8d9c836471416d83d12c43"
+    },
+    "EFA": {
+      "first": "2001-08-27",
+      "last": "2026-10-02",
+      "rows": 6312,
+      "sha256": "343ca075ad4f35b36b3eadfa2b358f998c4c9c4caa0e9b1ebe89d98cc7ae4a8b"
+    },
+    "GLD": {
+      "first": "2004-11-18",
+      "last": "2026-10-02",
+      "rows": 5502,
+      "sha256": "9212dcf6962c25863a95462b8bafb00f662732a2dddbc8dc81ac145bd9f62fea"
+    },
+    "IEF": {
+      "first": "2002-07-30",
+      "last": "2026-10-02",
+      "rows": 6084,
+      "sha256": "1e1cc22c0de35cf89e63d88335b43feafb2b37c62f6e0ea63152e282c9677b39"
+    },
+    "IWM": {
+      "first": "2000-05-26",
+      "last": "2026-10-02",
+      "rows": 6627,
+      "sha256": "cd937414a94d92f822a63f48175b4c7c80c4853c1cd1bfce3344408126a3cca5"
+    },
+    "QQQ": {
+      "first": "1999-03-10",
+      "last": "2026-10-02",
+      "rows": 6935,
+      "sha256": "606379f1b894ad03d0b92687e1a8a5fa575557580c2c33f61e8d3a8b329bf6f4"
+    },
+    "SPY": {
+      "first": "1993-01-29",
+      "last": "2026-10-02",
+      "rows": 8477,
+      "sha256": "149cb0edcaad3a8fe21df26a9ad956d8048e4d6b870897a64896eeb47f335919"
+    },
+    "TLT": {
+      "first": "2002-07-30",
+      "last": "2026-10-02",
+      "rows": 6084,
+      "sha256": "c0c6d08d01494315b9c3b7da0beaa9ce11fdaf21cee75b70c4d6a0932da4fd0e"
+    },
+    "VNQ": {
+      "first": "2004-09-29",
+      "last": "2026-10-02",
+      "rows": 5538,
+      "sha256": "2fe3224df55a10451f1e79bf35f476b79c66cd2ecfc943f75bbb9fba2bce8516"
+    },
+    "XLE": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "2ebbe84d9cc33c8eae70c6e5dfad1aaba99e84cecdc99ef6386b38f7c4570b85"
+    },
+    "XLF": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "73dbf480547dc411320dda97ac308f9ac7fb43a85c7a8c95d316cde5f76f69ea"
+    },
+    "XLI": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "64f545d6fcc9b8349b82cae84a8cef81fa83f9f94027d9bcf2cb50380a09310a"
+    },
+    "XLK": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "8d67b9ab642df41e55ce9e57823ff583ce840dee8056980b9dd2acd45848c370"
+    },
+    "XLP": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "819f034dff1dcf777361a0af0ee23e7b28b20a0f6d15fdd325e424d64c4cbdf1"
+    },
+    "XLU": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "86b35fc400e18c5dc87013f7256984d47f79a359cd15bf471285604a7ec4814c"
+    },
+    "XLV": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "9a92ee1474aea0838595417d57f9781ac9fec3a37df8bae9a5c5d0cbc6cc06c4"
+    },
+    "XLY": {
+      "first": "1998-12-22",
+      "last": "2026-10-02",
+      "rows": 6987,
+      "sha256": "991bdad349e073bee1ba5fed41f79263671fe5b85a5c624966acd57bee4d8a88"
+    },
+    "^IRX": {
+      "first": "1990-01-02",
+      "last": "2026-10-02",
+      "rows": 9225,
+      "sha256": "3594979cd0d88d8531692b769bc8a9251aee0762d1ae6708d894bbb9dc506838"
+    }
+  }
+}
