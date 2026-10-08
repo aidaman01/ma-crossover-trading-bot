@@ -8,7 +8,7 @@ holding stocks or a 60/40 portfolio, after costs and without look-ahead bias. Th
 the strategy on an Alpaca **paper** account; a 20-year backtest, robustness and regime
 analysis, and 61 offline tests support the research.
 
-**Live dashboard:** [ma-croappver-trading-bot.streamlit.app](https://ma-croappver-trading-bot-97vt9hjg2mof9trvutuqf6.streamlit.app/) ·
+**Live dashboard:** [trend-allocation-research.streamlit.app](https://trend-allocation-research.streamlit.app/) ·
 **Full report:** [`docs/research.md`](docs/research.md) ·
 **Paper-trading journal:** [`docs/paper-trading.md`](docs/paper-trading.md)
 
